@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from app.routers import chat, sessions  # sessions 必须在这里
+from app.routers import chat, sessions, agent  # sessions 必须在这里
 
 app = FastAPI(
     title="LYAITEST AI测试平台",
@@ -9,6 +9,7 @@ app = FastAPI(
 
 app.include_router(chat.router)
 app.include_router(sessions.router)  # 必须加上这一行
+app.include_router(agent.router) 
 
 @app.get("/")
 def root():
