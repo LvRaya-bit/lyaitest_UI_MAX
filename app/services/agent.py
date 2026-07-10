@@ -37,6 +37,10 @@ def identify_intent(state: AgentState):
     # 简单关键词匹配（后续会升级为 LLM 判断）
     if "测试用例" in user_message or "生成用例" in user_message:
         state["next_step"] = "generate_case"
+    elif "接口测试" in user_message or "API测试" in user_message:
+        state["next_step"] = "run_api_test"      # 新增
+    elif "Web自动化" in user_message or "浏览器" in user_message:
+        state["next_step"] = "run_web_test"      # 新增
     elif "运行" in user_message and "测试" in user_message:
         state["next_step"] = "run_test"
     else:
@@ -50,6 +54,30 @@ def generate_case(state: AgentState):
     state["messages"].append({
         "role": "assistant",
         "content": "📋 已生成登录测试用例：\n1. 打开登录页面\n2. 输入用户名\n3. 输入密码\n4. 点击登录按钮\n5. 验证登录成功"
+    })
+    state["next_step"] = "end"
+    return state
+
+# ============================================
+# 节点：执行接口测试
+# ============================================
+def run_api_test(state: AgentState):
+    """执行接口测试（目前为示例）"""
+    state["messages"].append({
+        "role": "assistant",
+        "content": "🧪 正在执行接口测试：\n1. 测试GET /api/users → 200 OK\n2. 测试POST /api/login → 200 OK\n3. 测试GET /api/order → 401 Unauthorized\n\n✅ 接口测试完成，3个通过，0个失败"
+    })
+    state["next_step"] = "end"
+    return state
+
+# ============================================
+# 节点：执行 Web 自动化测试
+# ============================================
+def run_web_test(state: AgentState):
+    """执行 Web 自动化测试（目前为示例）"""
+    state["messages"].append({
+        "role": "assistant",
+        "content": "🌐 正在执行 Web 自动化测试：\n1. 打开登录页面 → 成功\n2. 输入用户名 → 成功\n3. 输入密码 → 成功\n4. 点击登录按钮 → 成功\n5. 验证登录成功 → 通过\n\n✅ Web自动化测试完成，全部通过"
     })
     state["next_step"] = "end"
     return state
@@ -76,6 +104,8 @@ def build_agent():
     # 添加节点
     workflow.add_node("identify_intent", identify_intent)
     workflow.add_node("generate_case", generate_case)
+    workflow.add_node("run_api_test", run_api_test)   # 新增
+    workflow.add_node("run_web_test", run_web_test)   # 新增
     workflow.add_node("chat", chat)
     
     # 设置入口节点
@@ -87,6 +117,8 @@ def build_agent():
         lambda state: state["next_step"],
         {
             "generate_case": "generate_case",
+            "run_api_test": "run_api_test",
+            "run_web_test": "run_web_test",
             "chat": "chat",
             "end": END
         }
@@ -94,6 +126,8 @@ def build_agent():
     
     # 添加结束边
     workflow.add_edge("generate_case", END)
+    workflow.add_edge("run_api_test", END)
+    workflow.add_edge("run_web_test", END)
     workflow.add_edge("chat", END)
     
     # 编译
