@@ -1,81 +1,93 @@
 from fastapi import APIRouter, HTTPException
-from typing import List
+from pydantic import BaseModel
+from typing import List, Optional
+from app.database import get_connection
 import uuid
 from datetime import datetime
 
-from app.models.session import SessionCreate, SessionResponse, MessageResponse
-from app.storage import sessions_store, messages_store
-
-# ============================================
-# 创建路由分组
-# ============================================
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 
-# ============================================
-# 接口1：创建会话
-# ============================================
+class SessionCreate(BaseModel):
+    name: Optional[str] = None
+    knowledge_base_id: Optional[str] = None
+
+class SessionResponse(BaseModel):
+    session_id: str
+    name: str
+    created_at: str
+    knowledge_base_id: Optional[str] = None
+
+class MessageResponse(BaseModel):
+    role: str
+    content: str
+
 @router.post("/", response_model=SessionResponse)
 async def create_session(request: SessionCreate):
-    # 1. 生成唯一ID（8位随机字符串）
     session_id = str(uuid.uuid4())[:8]
-    
-    # 2. 处理会话名称：如果客户端没传，自动生成
     name = request.name or f"会话_{session_id}"
+    now = datetime.now().isoformat()
     
-    # 3. 记录创建时间
-    created_at = datetime.now().isoformat()
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO sessions (session_id, name, session_type, knowledge_base_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (session_id, name, "normal", request.knowledge_base_id, now, now))
+    conn.commit()
+    conn.close()
     
-    # 4. 保存到 sessions_store
-    sessions_store[session_id] = {
-        "name": name,
-        "created_at": created_at
-    }
-    
-    # 5. 为这个会话初始化空历史
-    messages_store[session_id] = []
-    
-    # 6. 返回给客户端
     return SessionResponse(
         session_id=session_id,
         name=name,
-        created_at=created_at
+        created_at=now,
+        knowledge_base_id=request.knowledge_base_id
     )
 
-# ============================================
-# 接口2：获取所有会话列表
-# ============================================
 @router.get("/", response_model=List[SessionResponse])
 async def list_sessions():
-    result = []
-    for session_id, data in sessions_store.items():
-        result.append(SessionResponse(
-            session_id=session_id,
-            name=data["name"],
-            created_at=data["created_at"]
-        ))
-    return result
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM sessions ORDER BY created_at DESC")
+    rows = cursor.fetchall()
+    conn.close()
+    return [SessionResponse(
+        session_id=row["session_id"],
+        name=row["name"],
+        created_at=row["created_at"],
+        knowledge_base_id=row["knowledge_base_id"]
+    ) for row in rows]
 
-# ============================================
-# 接口3：获取某个会话的历史消息
-# ============================================
+@router.get("/{session_id}", response_model=SessionResponse)
+async def get_session(session_id: str):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return SessionResponse(
+        session_id=row["session_id"],
+        name=row["name"],
+        created_at=row["created_at"],
+        knowledge_base_id=row["knowledge_base_id"]
+    )
+
 @router.get("/{session_id}/messages", response_model=List[MessageResponse])
 async def get_messages(session_id: str):
-    # 检查会话是否存在
-    if session_id not in messages_store:
-        raise HTTPException(status_code=404, detail="会话不存在")
-    return messages_store[session_id]
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC", (session_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [MessageResponse(role=row["role"], content=row["content"]) for row in rows]
 
-# ============================================
-# 接口4：删除会话
-# ============================================
 @router.delete("/{session_id}")
 async def delete_session(session_id: str):
-    # 检查会话是否存在
-    if session_id not in sessions_store:
-        raise HTTPException(status_code=404, detail="会话不存在")
-    
-    # 同时删除会话信息和历史消息
-    del sessions_store[session_id]
-    del messages_store[session_id]
-    
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+    cursor.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+    conn.commit()
+    conn.close()
     return {"message": "会话已删除"}

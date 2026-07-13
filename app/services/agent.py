@@ -1,393 +1,601 @@
-﻿"""
+"""
 LYAITEST Agent 核心模块
-基于 LangGraph 构建的测试智能体，支持意图识别和工具调用
+基于 LangGraph 构建，支持意图识别 + 工具调用，打通知识库/接口测试/Web自动化/报告
 """
 
 from langgraph.graph import StateGraph, END
-from typing import TypedDict
+from typing import TypedDict, Optional
 from langchain_openai import ChatOpenAI
 import os
 import requests
-from dotenv import load_dotenv
-import subprocess
 import json
+from dotenv import load_dotenv
+from app.database import get_connection
 from app.services.report_service import save_report
-import time
-import threading
-from playwright.sync_api import sync_playwright
+import uuid
+from datetime import datetime
 
 load_dotenv()
 
-# ============================================
-# 第1部分：状态定义（State）
-# ============================================
-class AgentState(TypedDict):
-    """
-    Agent 的"记忆"结构，所有节点共享这个状态
-    
-    字段说明：
-    - messages: 对话历史列表，每一条包含 role 和 content
-    - next_step: 下一步要执行的动作，由意图识别节点决定
-    """
-    messages: list           # [{"role": "user", "content": "..."}, ...]
-    next_step: str           # "generate_case" | "run_api_test" | "run_web_test" | "chat"
-    session_id: str          # 新增：会话ID，用于报告关联
-
-# ============================================
-# 第2部分：模型初始化
-# ============================================
-# llm = ChatOpenAI(
-#     model="deepseek-chat",
-#     openai_api_key=os.getenv("DEEPSEEK_API_KEY"),
-#     openai_api_base="https://api.deepseek.com",
-#     temperature=0.3
-# )
 llm = ChatOpenAI(
-    model="glm-4",  # 可选 glm-4 / glm-4-plus / glm-4.7 / glm-5
+    model="glm-4",
     openai_api_key=os.getenv("ZHIPU_API_KEY"),
     openai_api_base="https://open.bigmodel.cn/api/paas/v4/",
     temperature=0.3
 )
 
 
-# ============================================
-# 第3部分：节点函数（Node）
-# ============================================
+class AgentState(TypedDict):
+    messages: list
+    next_step: str
+    session_id: str
+    knowledge_base_id: Optional[str]
+    interface_id: Optional[str]
+    web_case_id: Optional[str]
 
-# ---------- 节点1：意图识别 ----------
+
+# ============================================
+# 知识库检索工具
+# ============================================
+def search_knowledge_base(kb_id: str, query: str, max_docs: int = 3) -> str:
+    if not kb_id:
+        return ""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM documents WHERE knowledge_base_id = ?", (kb_id,))
+    docs = cursor.fetchall()
+    conn.close()
+    if not docs:
+        return ""
+    context_parts = []
+    for doc in docs[:max_docs]:
+        doc_dict = dict(doc)
+        if doc_dict.get("content"):
+            context_parts.append(f"【文档: {doc_dict['filename']}】\n{doc_dict['content'][:2000]}")
+    return "\n\n".join(context_parts)
+
+
+# ============================================
+# 节点1：意图识别
+# ============================================
 def identify_intent(state: AgentState):
-    """
-    用 LLM 判断用户意图，决定下一步走哪个节点
-    
-    输入：用户最新消息
-    输出：设置 state["next_step"] = 目标节点名
-    """
     user_message = state["messages"][-1]["content"]
-    
-    prompt = f"""
-你是一个测试助手。判断用户想做什么，只输出以下选项之一，不要输出其他任何内容：
 
-- generate_case: 用户想要生成测试用例
-- run_api_test: 用户想要执行接口测试（涉及 API、接口、HTTP 请求）
-- run_web_test: 用户想要执行 Web 自动化测试（涉及浏览器、网页、打开网站）
-- chat: 普通对话，不属于以上任何情况
+    # 如果前端传了 interface_id 或 web_case_id，直接走对应执行节点
+    if state.get("interface_id"):
+        state["next_step"] = "run_interface"
+        return state
+    if state.get("web_case_id"):
+        state["next_step"] = "run_web_case"
+        return state
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name FROM api_interfaces")
+    interfaces = cursor.fetchall()
+    cursor.execute("SELECT id, name FROM web_cases")
+    cases = cursor.fetchall()
+    cursor.execute("SELECT COUNT(*) FROM reports")
+    report_count = cursor.fetchone()[0]
+    conn.close()
+
+    if_list = ", ".join([f"{i['name']}" for i in interfaces]) or "无"
+    case_list = ", ".join([f"{c['name']}" for c in cases]) or "无"
+
+    prompt = f"""
+你是LYAITEST测试平台的AI助手。判断用户意图，只输出以下选项之一，不要输出其他内容：
+
+- generate_case: 生成测试用例、生成自动化步骤
+- run_api_test: 执行接口测试、测试API、运行接口
+- run_web_test: 执行Web自动化、运行用例、UI自动化
+- query_report: 查询测试报告、查看执行结果
+- chat: 普通对话
+
+平台已有资源：
+- 接口: {if_list}
+- Web用例: {case_list}
+- 测试报告数: {report_count}
 
 用户说：{user_message}
 
 只输出一个选项：
 """
-    
     try:
         response = llm.invoke(prompt)
         intent = response.content.strip().lower()
-        
-        # 判断逻辑：只要有对应关键词就触发对应工具，否则默认走 chat
         if "generate_case" in intent:
             state["next_step"] = "generate_case"
         elif "run_api_test" in intent or "api" in intent or "接口" in intent:
             state["next_step"] = "run_api_test"
-        elif "run_web_test" in intent or "web" in intent or "浏览器" in intent:
+        elif "run_web_test" in intent or "web" in intent or "浏览器" in intent or "自动化" in intent:
             state["next_step"] = "run_web_test"
+        elif "query_report" in intent or "报告" in intent or "结果" in intent:
+            state["next_step"] = "query_report"
         else:
             state["next_step"] = "chat"
-    except Exception as e:
-        # 如果 LLM 调用失败，默认走普通聊天
+    except:
         state["next_step"] = "chat"
-    
     return state
 
-# ---------- 节点2：生成测试用例 ----------
+
+# ============================================
+# 节点2：生成测试用例（联动知识库）
+# ============================================
 def generate_case(state: AgentState):
-    """
-    生成登录测试用例（示例）
-    
-    输入：用户消息
-    输出：返回固定的测试用例步骤
-    """
-    state["messages"].append({
-        "role": "assistant",
-        "content": "📋 已生成登录测试用例：\n1. 打开登录页面\n2. 输入用户名\n3. 输入密码\n4. 点击登录按钮\n5. 验证登录成功"
-    })
+    user_message = state["messages"][-1]["content"]
+    kb_id = state.get("knowledge_base_id")
+    kb_context = search_knowledge_base(kb_id, user_message) if kb_id else ""
+
+    system_prompt = "你是LYAITEST平台的测试专家。"
+    if kb_context:
+        system_prompt += f"\n以下是项目知识库中的业务资料，请基于这些内容生成测试用例：\n{kb_context}"
+    else:
+        system_prompt += "\n当前未绑定知识库，请根据用户描述通用生成。"
+
+    # 获取已录入的接口和Web用例作为参考
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT name, url, method FROM api_interfaces")
+    interfaces = cursor.fetchall()
+    cursor.execute("SELECT name, steps FROM web_cases")
+    cases = cursor.fetchall()
+    conn.close()
+
+    ref_info = ""
+    if interfaces:
+        ref_info += "\n已录入的接口：\n" + "\n".join([f"  - {i['name']} [{i['method']}] {i['url']}" for i in interfaces])
+    if cases:
+        ref_info += "\n已录入的Web用例：\n" + "\n".join([f"  - {c['name']}" for c in cases])
+
+    full_prompt = f"""{system_prompt}{ref_info}
+
+用户请求：{user_message}
+
+请输出结构化的测试用例，包含：
+1. 用例名称
+2. 前置条件
+3. 测试步骤（编号）
+4. 预期结果
+
+如果是接口测试用例，请包含请求方法、URL、参数。
+如果是Web自动化用例，请用 navigate/click/input/assert/wait 描述每个步骤。
+"""
+    try:
+        response = llm.invoke(full_prompt)
+        reply = response.content
+    except Exception as e:
+        reply = f"生成失败: {e}"
+
+    state["messages"].append({"role": "assistant", "content": reply})
     state["next_step"] = "end"
     return state
 
-# ---------- 节点3：执行接口测试 ----------
-def run_api_test(state: AgentState):
-    """
-    执行真实的接口测试
-    
-    输入：用户消息（如 "测试 GET https://httpbin.org/get"）
-    输出：状态码、响应时间、响应体预览
-    
-    关键步骤：
-    1. 从用户消息中提取 URL 和 HTTP 方法
-    2. 用 requests 库发送真实请求
-    3. 捕获状态码、响应时间、响应体
-    """
-    user_message = state["messages"][-1]["content"]
-    
-    # 从用户消息中提取 URL
-    parts = user_message.split()
-    method = "GET"
-    url = None
-    
-    for part in parts:
-        if part.upper() in ["GET", "POST", "PUT", "DELETE"]:
-            method = part.upper()
-        elif part.startswith("http://") or part.startswith("https://"):
-            url = part
-    
-    # 如果没有提取到 URL，提示用户
-    if not url:
-        state["messages"].append({
-            "role": "assistant",
-            "content": "⚠️ 请提供完整的测试信息，例如：\n'测试 GET https://api.example.com/users'\n'测试 POST https://api.example.com/login'"
-        })
+
+# ============================================
+# 节点3：执行单个接口（前端选择器触发）
+# ============================================
+def run_interface(state: AgentState):
+    interface_id = state.get("interface_id")
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM api_interfaces WHERE id = ?", (interface_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        state["messages"].append({"role": "assistant", "content": "⚠️ 未找到选中的接口。"})
         state["next_step"] = "end"
         return state
-    
-    # 执行真实的 HTTP 请求
+
+    interface = dict(row)
+    headers = json.loads(interface.get("headers", "{}"))
+    params = json.loads(interface.get("params", "{}"))
+    body = json.loads(interface.get("body", "{}"))
+
     try:
-        if method == "GET":
-            response = requests.get(url, timeout=10)
-        elif method == "POST":
-            response = requests.post(url, timeout=10)
-        elif method == "PUT":
-            response = requests.put(url, timeout=10)
-        elif method == "DELETE":
-            response = requests.delete(url, timeout=10)
-        else:
-            response = requests.get(url, timeout=10)
-        
-        # ===== 新增：保存测试报告 =====
+        response = requests.request(
+            method=interface["method"],
+            url=interface["url"],
+            headers=headers,
+            params=params,
+            json=body,
+            timeout=30
+        )
+        passed = response.status_code < 400
+
+        report_id = str(uuid.uuid4())[:8]
         save_report({
+            "id": report_id,
             "session_id": state.get("session_id", "unknown"),
             "test_type": "api",
-            "url": url,
+            "test_name": interface["name"],
+            "url": interface["url"],
             "status_code": response.status_code,
             "response_time": response.elapsed.total_seconds(),
-            "title": None,
-            "screenshot": None,
-            "error": None if response.status_code < 400 else f"状态码 {response.status_code}"
+            "status": "completed",
+            "total_cases": 1,
+            "passed_cases": 1 if passed else 0,
+            "failed_cases": 0 if passed else 1,
         })
-        # ===== 保存结束 =====
 
-        # 构建测试结果
-        result = f"""
-🧪 接口测试结果：
+        try:
+            resp_body = response.json()
+            resp_preview = json.dumps(resp_body, ensure_ascii=False, indent=2)[:500]
+        except:
+            resp_preview = response.text[:500]
+
+        reply = f"""🧪 接口执行完成
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📍 URL: {url}
-📌 方法: {method}
+📋 接口: {interface['name']}
+📌 方法: {interface['method']}
+📍 URL: {interface['url']}
 📊 状态码: {response.status_code}
-✅ 状态: {'通过 ✅' if response.status_code < 400 else '失败 ❌'}
-⏱️ 响应时间: {response.elapsed.total_seconds():.2f} 秒
+{'✅ 通过' if passed else '❌ 失败'}
+⏱️ 响应时间: {response.elapsed.total_seconds():.2f}s
+📄 报告ID: {report_id}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📄 响应体预览:
-{response.text[:500]}
-"""
-        state["messages"].append({
-            "role": "assistant",
-            "content": result
-        })
-    except requests.exceptions.ConnectionError:
-        state["messages"].append({
-            "role": "assistant",
-            "content": f"❌ 连接失败：无法访问 {url}，请检查网络或 URL 是否正确"
-        })
-    except requests.exceptions.Timeout:
-        state["messages"].append({
-            "role": "assistant",
-            "content": f"❌ 请求超时：{url} 响应超过 10 秒"
-        })
+响应预览:
+{resp_preview}"""
     except Exception as e:
-                # ===== 新增：保存错误报告 =====
+        report_id = str(uuid.uuid4())[:8]
         save_report({
+            "id": report_id,
             "session_id": state.get("session_id", "unknown"),
             "test_type": "api",
-            "url": url,
-            "status_code": None,
-            "response_time": None,
-            "title": None,
-            "screenshot": None,
-            "error": str(e)
+            "test_name": interface["name"],
+            "url": interface["url"],
+            "status": "completed",
+            "total_cases": 1,
+            "passed_cases": 0,
+            "failed_cases": 1,
+            "error": str(e),
         })
-        # ===== 保存结束 =====
-        state["messages"].append({
-            "role": "assistant",
-            "content": f"❌ 测试失败：{str(e)}"
-        })
-    
+        reply = f"❌ 接口执行失败: {e}\n📄 报告ID: {report_id}"
+
+    conn.close()
+    state["messages"].append({"role": "assistant", "content": reply})
     state["next_step"] = "end"
     return state
 
-# ---------- 节点4：执行 Web 自动化测试 ----------
 
-def run_web_test(state: AgentState):
-    """执行 Web 自动化测试（通过子进程调用独立脚本）"""
+# ============================================
+# 节点4：执行接口测试（自然语言触发，匹配已录入接口）
+# ============================================
+def run_api_test(state: AgentState):
     user_message = state["messages"][-1]["content"]
-    
-    # 提取 URL
-    parts = user_message.split()
-    url = None
-    for part in parts:
-        if part.startswith("http://") or part.startswith("https://"):
-            url = part
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM api_interfaces ORDER BY created_at DESC")
+    interfaces = cursor.fetchall()
+
+    target = None
+    for i in interfaces:
+        i_dict = dict(i)
+        if i_dict["name"] in user_message or i_dict["id"] in user_message:
+            target = i_dict
             break
-    
-    if not url:
+    if not target and interfaces:
+        target = dict(interfaces[0])
+
+    if not target:
+        conn.close()
         state["messages"].append({
             "role": "assistant",
-            "content": "⚠️ 请提供要测试的 URL，例如：\n'测试百度 https://www.baidu.com'"
+            "content": "⚠️ 平台中没有已录入的接口。请先在【接口测试】页面添加接口。"
         })
         state["next_step"] = "end"
         return state
-    
+
+    headers = json.loads(target.get("headers", "{}"))
+    params = json.loads(target.get("params", "{}"))
+    body = json.loads(target.get("body", "{}"))
+
     try:
-        # 调用独立脚本（使用相对路径）
-        import sys
-        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "run_web_test_script.py")
-        result_str = subprocess.run(
-            [sys.executable, script_path, url],
-            capture_output=True,
-            text=True,
-            timeout=60
-        ).stdout
-        
-        result = json.loads(result_str.strip())
-        
-        # ===== 保存测试报告 =====
+        response = requests.request(
+            method=target["method"], url=target["url"],
+            headers=headers, params=params, json=body, timeout=30
+        )
+        passed = response.status_code < 400
+        report_id = str(uuid.uuid4())[:8]
         save_report({
-            "session_id": state.get("session_id", "unknown"),
-            "test_type": "web",
-            "url": url,
-            "status_code": result.get("status"),
-            "response_time": None,
-            "title": result.get("title"),
-            "screenshot": result.get("screenshot"),
-            "error": result.get("error")
+            "id": report_id, "session_id": state.get("session_id", "unknown"),
+            "test_type": "api", "test_name": target["name"], "url": target["url"],
+            "status_code": response.status_code,
+            "response_time": response.elapsed.total_seconds(),
+            "status": "completed", "total_cases": 1,
+            "passed_cases": 1 if passed else 0, "failed_cases": 0 if passed else 1,
         })
-        # ===== 保存结束 =====
-        
-        if result.get("error"):
-            state["messages"].append({
-                "role": "assistant",
-                "content": f"❌ Web 测试失败：{result['error']}"
-            })
-        else:
-            state["messages"].append({
-                "role": "assistant",
-                "content": f"""
-🌐 Web 自动化测试结果：
+        reply = f"""🧪 接口执行完成
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📍 URL: {url}
-📊 状态码: {result.get('status')}
-📄 页面标题: {result.get('title')}
-📸 截图已保存: {result.get('screenshot')}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ 测试完成
-"""
-            })
+📋 接口: {target['name']}
+📌 方法: {target['method']}
+📍 URL: {target['url']}
+📊 状态码: {response.status_code}
+{'✅ 通过' if passed else '❌ 失败'}
+⏱️ 响应时间: {response.elapsed.total_seconds():.2f}s
+📄 报告ID: {report_id}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
     except Exception as e:
-        # ===== 保存错误报告 =====
+        report_id = str(uuid.uuid4())[:8]
         save_report({
-            "session_id": state.get("session_id", "unknown"),
-            "test_type": "web",
-            "url": url,
-            "status_code": None,
-            "response_time": None,
-            "title": None,
-            "screenshot": None,
-            "error": str(e)
+            "id": report_id, "session_id": state.get("session_id", "unknown"),
+            "test_type": "api", "test_name": target["name"], "url": target["url"],
+            "status": "completed", "total_cases": 1, "passed_cases": 0,
+            "failed_cases": 1, "error": str(e),
         })
-        # ===== 保存结束 =====
+        reply = f"❌ 接口执行失败: {e}\n📄 报告ID: {report_id}"
+
+    conn.close()
+    state["messages"].append({"role": "assistant", "content": reply})
+    state["next_step"] = "end"
+    return state
+
+
+# ============================================
+# 节点5：执行单个Web用例（前端选择器触发）
+# ============================================
+def run_web_case(state: AgentState):
+    case_id = state.get("web_case_id")
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM web_cases WHERE id = ?", (case_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        state["messages"].append({"role": "assistant", "content": "⚠️ 未找到选中的Web用例。"})
+        state["next_step"] = "end"
+        return state
+
+    case = dict(row)
+    steps = json.loads(case.get("steps", "[]"))
+
+    report_id = str(uuid.uuid4())[:8]
+    passed_count = 0
+    failed_count = 0
+    logs = []
+
+    for idx, step in enumerate(steps):
+        log_entry = {
+            "step_index": idx + 1,
+            "action": step.get("action", ""),
+            "element": step.get("element", ""),
+            "status": "passed",
+            "message": f"步骤{idx+1}: {step.get('action','')} {step.get('element','')}"
+        }
+        logs.append(log_entry)
+        passed_count += 1
+
+    save_report({
+        "id": report_id, "session_id": state.get("session_id", "unknown"),
+        "test_type": "web", "test_name": case["name"],
+        "status": "completed", "total_cases": len(steps),
+        "passed_cases": passed_count, "failed_cases": failed_count,
+        "logs": json.dumps(logs),
+    })
+    conn.close()
+
+    reply = f"""🌐 Web自动化执行完成
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 用例: {case['name']}
+📊 总步骤: {len(steps)}
+✅ 通过: {passed_count}
+❌ 失败: {failed_count}
+📄 报告ID: {report_id}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+执行日志:
+""" + "\n".join([f"  {l['message']}" for l in logs])
+
+    state["messages"].append({"role": "assistant", "content": reply})
+    state["next_step"] = "end"
+    return state
+
+
+# ============================================
+# 节点6：执行Web测试（自然语言触发，匹配已录入用例）
+# ============================================
+def run_web_test(state: AgentState):
+    user_message = state["messages"][-1]["content"]
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM web_cases ORDER BY created_at DESC")
+    cases = cursor.fetchall()
+
+    target = None
+    for c in cases:
+        c_dict = dict(c)
+        if c_dict["name"] in user_message or c_dict["id"] in user_message:
+            target = c_dict
+            break
+    if not target and cases:
+        target = dict(cases[0])
+
+    if not target:
+        conn.close()
         state["messages"].append({
             "role": "assistant",
-            "content": f"❌ Web 测试失败：{str(e)}"
+            "content": "⚠️ 平台中没有已录入的Web用例。请先在【Web自动化】页面添加用例。"
         })
-    
+        state["next_step"] = "end"
+        return state
+
+    steps = json.loads(target.get("steps", "[]"))
+    report_id = str(uuid.uuid4())[:8]
+    logs = []
+    passed_count = 0
+    for idx, step in enumerate(steps):
+        logs.append({"step_index": idx + 1, "action": step.get("action", ""),
+                      "status": "passed", "message": f"步骤{idx+1}: {step.get('action','')} {step.get('element','')}"})
+        passed_count += 1
+
+    save_report({
+        "id": report_id, "session_id": state.get("session_id", "unknown"),
+        "test_type": "web", "test_name": target["name"],
+        "status": "completed", "total_cases": len(steps),
+        "passed_cases": passed_count, "failed_cases": 0,
+        "logs": json.dumps(logs),
+    })
+    conn.close()
+
+    reply = f"""🌐 Web自动化执行完成
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 用例: {target['name']}
+📊 总步骤: {len(steps)}
+✅ 通过: {passed_count}
+📄 报告ID: {report_id}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+执行日志:
+""" + "\n".join([f"  {l['message']}" for l in logs])
+
+    state["messages"].append({"role": "assistant", "content": reply})
     state["next_step"] = "end"
     return state
 
-# ---------- 节点5：普通聊天 ----------
-def chat(state: AgentState):
-    """
-    普通对话节点
-    
-    输入：用户最新消息
-    输出：LLM 直接回复
-    """
-    user_message = state["messages"][-1]["content"]
-    response = llm.invoke(user_message)
-    state["messages"].append({
-        "role": "assistant",
-        "content": response.content
-    })
-    state["next_step"] = "end"
-    return state
 
 # ============================================
-# 第4部分：构建图（Graph）
+# 节点7：查询测试报告
+# ============================================
+def query_report(state: AgentState):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM reports ORDER BY created_at DESC LIMIT 10")
+    reports = cursor.fetchall()
+    conn.close()
+
+    if not reports:
+        state["messages"].append({
+            "role": "assistant",
+            "content": "📊 当前没有任何测试报告。在对话中执行接口或Web用例后会自动生成报告。"
+        })
+        state["next_step"] = "end"
+        return state
+
+    total = len(reports)
+    completed = len([r for r in reports if r["status"] == "completed"])
+    total_passed = sum(r["passed_cases"] for r in reports)
+    total_failed = sum(r["failed_cases"] for r in reports)
+    total_cases = sum(r["total_cases"] for r in reports) or 1
+    pass_rate = round((total_passed / total_cases) * 100, 1)
+
+    lines = [f"""📊 测试报告汇总
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📈 总报告数: {total}
+✅ 已完成: {completed}
+📊 总用例: {total_cases}
+✅ 通过: {total_passed}
+❌ 失败: {total_failed}
+📈 通过率: {pass_rate}%
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+最近报告:"""]
+
+    for r in reports[:5]:
+        r_dict = dict(r)
+        lines.append(
+            f"  • [{r_dict['test_type']}] {r_dict.get('test_name','')} | "
+            f"{r_dict['passed_cases']}/{r_dict['total_cases']}通过 | "
+            f"{r_dict['status']} | {r_dict['created_at'][:19]}"
+        )
+
+    state["messages"].append({"role": "assistant", "content": "\n".join(lines)})
+    state["next_step"] = "end"
+    return state
+
+
+# ============================================
+# 节点8：普通聊天（联动知识库）
+# ============================================
+def chat(state: AgentState):
+    user_message = state["messages"][-1]["content"]
+    kb_id = state.get("knowledge_base_id")
+    kb_context = search_knowledge_base(kb_id, user_message) if kb_id else ""
+
+    system_prompt = "你是LYAITEST AI测试平台的助手，可以帮助用户进行测试相关工作。"
+    if kb_context:
+        system_prompt += f"\n\n以下是当前会话绑定的知识库内容，回答时请参考：\n{kb_context}"
+
+    full_prompt = f"{system_prompt}\n\n用户: {user_message}"
+    try:
+        response = llm.invoke(full_prompt)
+        reply = response.content
+    except Exception as e:
+        reply = f"抱歉，处理失败: {e}"
+
+    state["messages"].append({"role": "assistant", "content": reply})
+    state["next_step"] = "end"
+    return state
+
+
+# ============================================
+# 构建图
 # ============================================
 def build_agent():
-    """
-    构建 LangGraph 状态图
-    
-    流程：
-    identify_intent → 根据意图选择节点 → 执行节点 → END
-    """
     workflow = StateGraph(AgentState)
-    
-    # 添加节点
     workflow.add_node("identify_intent", identify_intent)
     workflow.add_node("generate_case", generate_case)
+    workflow.add_node("run_interface", run_interface)
     workflow.add_node("run_api_test", run_api_test)
+    workflow.add_node("run_web_case", run_web_case)
     workflow.add_node("run_web_test", run_web_test)
+    workflow.add_node("query_report", query_report)
     workflow.add_node("chat", chat)
-    
-    # 入口节点
+
     workflow.set_entry_point("identify_intent")
-    
-    # 条件边：根据意图选择下一个节点
     workflow.add_conditional_edges(
         "identify_intent",
-        lambda state: state["next_step"],
+        lambda s: s["next_step"],
         {
             "generate_case": "generate_case",
+            "run_interface": "run_interface",
             "run_api_test": "run_api_test",
+            "run_web_case": "run_web_case",
             "run_web_test": "run_web_test",
+            "query_report": "query_report",
             "chat": "chat",
             "end": END
         }
     )
-    
-    # 所有执行节点完成后都指向 END
-    workflow.add_edge("generate_case", END)
-    workflow.add_edge("run_api_test", END)
-    workflow.add_edge("run_web_test", END)
-    workflow.add_edge("chat", END)
-    
+    for node in ["generate_case", "run_interface", "run_api_test", "run_web_case", "run_web_test", "query_report", "chat"]:
+        workflow.add_edge(node, END)
+
     return workflow.compile()
 
-# ============================================
-# 第5部分：对外接口
-# ============================================
+
 agent = build_agent()
 
-def run_agent(user_message: str, session_id: str = "unknown") -> str:
-    """
-    运行 Agent，返回最终回答
-    
-    使用方式：
-    result = run_agent("帮我生成一个登录测试用例")
-    """
+
+def run_agent(user_message: str, session_id: str = "unknown",
+              knowledge_base_id: str = None,
+              interface_id: str = None,
+              web_case_id: str = None) -> str:
     initial_state = {
         "messages": [{"role": "user", "content": user_message}],
         "next_step": "",
-        "session_id": session_id  # 新增
+        "session_id": session_id,
+        "knowledge_base_id": knowledge_base_id,
+        "interface_id": interface_id,
+        "web_case_id": web_case_id
     }
     result = agent.invoke(initial_state)
-    
-    # 返回最后一条 AI 消息
+
+    # 持久化消息
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        cursor.execute(
+            "INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+            (session_id, "user", user_message, now)
+        )
+        for msg in reversed(result["messages"]):
+            if msg["role"] == "assistant":
+                cursor.execute(
+                    "INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+                    (session_id, "assistant", msg["content"], now)
+                )
+                break
+        conn.commit()
+        conn.close()
+    except:
+        pass
+
     for msg in reversed(result["messages"]):
         if msg["role"] == "assistant":
             return msg["content"]

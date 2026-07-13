@@ -1,40 +1,49 @@
-﻿# app/services/report_service.py
-# 报告服务：将测试报告存入 SQLite 数据库
-
 import uuid
 from datetime import datetime
 from app.database import get_connection
 
+
 def save_report(report_data: dict):
     """保存测试报告到 SQLite"""
-    report_id = str(uuid.uuid4())[:8]
+    report_id = report_data.get("id") or str(uuid.uuid4())[:8]
+    now = datetime.now().isoformat()
     conn = get_connection()
     cursor = conn.cursor()
-    
+
     cursor.execute("""
         INSERT INTO reports (
-            id, session_id, test_type, url, status_code,
-            response_time, title, screenshot, error, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            id, session_id, task_id, test_type, test_name, url, status_code,
+            response_time, title, screenshot, error, status, total_cases,
+            passed_cases, failed_cases, duration, logs, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         report_id,
         report_data.get("session_id", "unknown"),
+        report_data.get("task_id"),
         report_data.get("test_type", "unknown"),
+        report_data.get("test_name", ""),
         report_data.get("url", ""),
         report_data.get("status_code"),
         report_data.get("response_time"),
         report_data.get("title"),
         report_data.get("screenshot"),
         report_data.get("error"),
-        datetime.now().isoformat()
+        report_data.get("status", "completed"),
+        report_data.get("total_cases", 0),
+        report_data.get("passed_cases", 0),
+        report_data.get("failed_cases", 0),
+        report_data.get("duration"),
+        report_data.get("logs"),
+        now,
+        now
     ))
-    
+
     conn.commit()
     conn.close()
     return report_id
 
+
 def get_all_reports():
-    """获取所有测试报告"""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM reports ORDER BY created_at DESC")
@@ -42,8 +51,8 @@ def get_all_reports():
     conn.close()
     return [dict(row) for row in rows]
 
+
 def get_reports_by_session(session_id: str):
-    """根据会话ID获取报告"""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -54,8 +63,8 @@ def get_reports_by_session(session_id: str):
     conn.close()
     return [dict(row) for row in rows]
 
+
 def get_report_by_id(report_id: str):
-    """根据报告ID获取单条报告"""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM reports WHERE id = ?", (report_id,))
