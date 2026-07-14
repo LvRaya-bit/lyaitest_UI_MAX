@@ -181,6 +181,7 @@ def render_sidebar():
             {"id": "api_test", "name": "🔌 接口测试"},
             {"id": "web_automation", "name": "🌐 Web自动化"},
             {"id": "test_reports", "name": "📊 测试报告"},
+            {"id": "user_management", "name": "👥 用户管理"},
         ]
         for item in menus:
             if st.button(item["name"], key=f"menu_{item['id']}", use_container_width=True,
@@ -680,6 +681,35 @@ def render_test_reports():
                     pass
 
 
+def render_user_management():
+    st.title("👥 用户管理")
+
+    st.info("📋 本页面展示所有注册用户及其会话信息。")
+
+    try:
+        users = fetch_data("admin/users")
+        if not users:
+            st.info("暂无用户。")
+            return
+
+        st.metric("总用户数", len(users))
+
+        st.divider()
+
+        for user in users:
+            with st.expander(f"👤 {user['username']} (ID: {user['id']})"):
+                st.write(f"**创建时间**: {user['created_at'][:19]}")
+
+                sessions = fetch_data(f"admin/users/{user['id']}/sessions")
+                if sessions:
+                    st.subheader("会话列表")
+                    for session in sessions:
+                        st.write(f"- {session['name']} (ID: {session['session_id']}) - {session['created_at'][:19]}")
+                else:
+                    st.write("暂无会话")
+    except Exception as e:
+        st.error(f"加载失败: {e}")
+
 # ============================================
 # 路由分发
 # ============================================
@@ -697,3 +727,5 @@ else:
         render_web_automation()
     elif st.session_state.current_page == "test_reports":
         render_test_reports()
+    elif st.session_state.current_page == "user_management":
+        render_user_management()
