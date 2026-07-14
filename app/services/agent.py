@@ -32,17 +32,21 @@ class AgentState(TypedDict):
     knowledge_base_id: Optional[str]
     interface_id: Optional[str]
     web_case_id: Optional[str]
+    user_id: Optional[str]
 
 
 # ============================================
 # 知识库检索工具
 # ============================================
-def search_knowledge_base(kb_id: str, query: str, max_docs: int = 3) -> str:
+def search_knowledge_base(kb_id: str, query: str, max_docs: int = 3, user_id: str = None) -> str:
     if not kb_id:
         return ""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM documents WHERE knowledge_base_id = ?", (kb_id,))
+    if user_id:
+        cursor.execute("SELECT * FROM documents WHERE knowledge_base_id = ? AND user_id = ?", (kb_id, user_id))
+    else:
+        cursor.execute("SELECT * FROM documents WHERE knowledge_base_id = ?", (kb_id,))
     docs = cursor.fetchall()
     conn.close()
     if not docs:
@@ -124,7 +128,8 @@ def identify_intent(state: AgentState):
 def generate_case(state: AgentState):
     user_message = state["messages"][-1]["content"]
     kb_id = state.get("knowledge_base_id")
-    kb_context = search_knowledge_base(kb_id, user_message) if kb_id else ""
+    user_id = state.get("user_id")
+    kb_context = search_knowledge_base(kb_id, user_message, user_id=user_id) if kb_id else ""
 
     system_prompt = "你是LYAITEST平台的测试专家。"
     if kb_context:
@@ -505,7 +510,8 @@ def query_report(state: AgentState):
 def chat(state: AgentState):
     user_message = state["messages"][-1]["content"]
     kb_id = state.get("knowledge_base_id")
-    kb_context = search_knowledge_base(kb_id, user_message) if kb_id else ""
+    user_id = state.get("user_id")
+    kb_context = search_knowledge_base(kb_id, user_message, user_id=user_id) if kb_id else ""
 
     system_prompt = "你是LYAITEST AI测试平台的助手，可以帮助用户进行测试相关工作。"
     if kb_context:
@@ -564,14 +570,16 @@ agent = build_agent()
 def run_agent(user_message: str, session_id: str = "unknown",
               knowledge_base_id: str = None,
               interface_id: str = None,
-              web_case_id: str = None) -> str:
+              web_case_id: str = None,
+              user_id: str = None) -> str:
     initial_state = {
         "messages": [{"role": "user", "content": user_message}],
         "next_step": "",
         "session_id": session_id,
         "knowledge_base_id": knowledge_base_id,
         "interface_id": interface_id,
-        "web_case_id": web_case_id
+        "web_case_id": web_case_id,
+        "user_id": user_id
     }
     result = agent.invoke(initial_state)
 
@@ -581,14 +589,14 @@ def run_agent(user_message: str, session_id: str = "unknown",
         cursor = conn.cursor()
         now = datetime.now().isoformat()
         cursor.execute(
-            "INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-            (session_id, "user", user_message, now)
+            "INSERT INTO messages (user_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user_id, session_id, "user", user_message, now)
         )
         for msg in reversed(result["messages"]):
             if msg["role"] == "assistant":
                 cursor.execute(
-                    "INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-                    (session_id, "assistant", msg["content"], now)
+                    "INSERT INTO messages (user_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (user_id, session_id, "assistant", msg["content"], now)
                 )
                 break
         conn.commit()

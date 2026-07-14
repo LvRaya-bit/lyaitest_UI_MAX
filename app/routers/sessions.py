@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional
 from app.database import get_connection
+from app.dependencies.auth import get_current_user
 import uuid
 from datetime import datetime
 
@@ -22,7 +23,7 @@ class MessageResponse(BaseModel):
     content: str
 
 @router.post("/", response_model=SessionResponse)
-async def create_session(request: SessionCreate):
+async def create_session(request: SessionCreate, current_user: dict = Depends(get_current_user)):
     session_id = str(uuid.uuid4())[:8]
     name = request.name or f"会话_{session_id}"
     now = datetime.now().isoformat()
@@ -30,9 +31,9 @@ async def create_session(request: SessionCreate):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO sessions (session_id, name, session_type, knowledge_base_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (session_id, name, "normal", request.knowledge_base_id, now, now))
+        INSERT INTO sessions (session_id, user_id, name, session_type, knowledge_base_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (session_id, current_user["id"], name, "normal", request.knowledge_base_id, now, now))
     conn.commit()
     conn.close()
     
@@ -44,10 +45,10 @@ async def create_session(request: SessionCreate):
     )
 
 @router.get("/", response_model=List[SessionResponse])
-async def list_sessions():
+async def list_sessions(current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM sessions ORDER BY created_at DESC")
+    cursor.execute("SELECT * FROM sessions WHERE user_id = ? ORDER BY created_at DESC", (current_user["id"],))
     rows = cursor.fetchall()
     conn.close()
     return [SessionResponse(
@@ -58,10 +59,10 @@ async def list_sessions():
     ) for row in rows]
 
 @router.get("/{session_id}", response_model=SessionResponse)
-async def get_session(session_id: str):
+async def get_session(session_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,))
+    cursor.execute("SELECT * FROM sessions WHERE session_id = ? AND user_id = ?", (session_id, current_user["id"]))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -74,20 +75,20 @@ async def get_session(session_id: str):
     )
 
 @router.get("/{session_id}/messages", response_model=List[MessageResponse])
-async def get_messages(session_id: str):
+async def get_messages(session_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC", (session_id,))
+    cursor.execute("SELECT * FROM messages WHERE session_id = ? AND user_id = ? ORDER BY created_at ASC", (session_id, current_user["id"]))
     rows = cursor.fetchall()
     conn.close()
     return [MessageResponse(role=row["role"], content=row["content"]) for row in rows]
 
 @router.delete("/{session_id}")
-async def delete_session(session_id: str):
+async def delete_session(session_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
-    cursor.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+    cursor.execute("DELETE FROM messages WHERE session_id = ? AND user_id = ?", (session_id, current_user["id"]))
+    cursor.execute("DELETE FROM sessions WHERE session_id = ? AND user_id = ?", (session_id, current_user["id"]))
     conn.commit()
     conn.close()
     return {"message": "会话已删除"}

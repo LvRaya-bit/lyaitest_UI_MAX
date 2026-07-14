@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, Depends
 from app.database import get_connection
+from app.dependencies.auth import get_current_user
 import json
 import uuid
 from datetime import datetime
@@ -7,25 +8,26 @@ from datetime import datetime
 router = APIRouter(prefix="/api/v1/web-automation", tags=["Web自动化"])
 
 @router.get("/cases")
-def list_cases():
+def list_cases(current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM web_cases ORDER BY created_at DESC")
+    cursor.execute("SELECT * FROM web_cases WHERE user_id = ? ORDER BY created_at DESC", (current_user["id"],))
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 @router.post("/cases")
-def create_case(data: dict = Body(...)):
+def create_case(data: dict = Body(...), current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
     case_id = str(uuid.uuid4())[:8]
     now = datetime.now().isoformat()
     cursor.execute("""
-        INSERT INTO web_cases (id, name, description, steps, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO web_cases (id, user_id, name, description, steps, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (
         case_id,
+        current_user["id"],
         data.get("name"),
         data.get("description"),
         json.dumps(data.get("steps", [])),
@@ -37,10 +39,10 @@ def create_case(data: dict = Body(...)):
     return {"id": case_id, "message": "创建成功"}
 
 @router.get("/cases/{case_id}")
-def get_case(case_id: str):
+def get_case(case_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM web_cases WHERE id = ?", (case_id,))
+    cursor.execute("SELECT * FROM web_cases WHERE id = ? AND user_id = ?", (case_id, current_user["id"]))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -50,7 +52,7 @@ def get_case(case_id: str):
     return result
 
 @router.put("/cases/{case_id}")
-def update_case(case_id: str, data: dict = Body(...)):
+def update_case(case_id: str, data: dict = Body(...), current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
     updates = []
@@ -68,25 +70,26 @@ def update_case(case_id: str, data: dict = Body(...)):
         updates.append("updated_at = ?")
         params.append(datetime.now().isoformat())
         params.append(case_id)
-        cursor.execute(f"UPDATE web_cases SET {', '.join(updates)} WHERE id = ?", params)
+        params.append(current_user["id"])
+        cursor.execute(f"UPDATE web_cases SET {', '.join(updates)} WHERE id = ? AND user_id = ?", params)
         conn.commit()
     conn.close()
     return {"message": "更新成功"}
 
 @router.delete("/cases/{case_id}")
-def delete_case(case_id: str):
+def delete_case(case_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM web_cases WHERE id = ?", (case_id,))
+    cursor.execute("DELETE FROM web_cases WHERE id = ? AND user_id = ?", (case_id, current_user["id"]))
     conn.commit()
     conn.close()
     return {"message": "删除成功"}
 
 @router.post("/cases/{case_id}/run")
-def run_case(case_id: str):
+def run_case(case_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM web_cases WHERE id = ?", (case_id,))
+    cursor.execute("SELECT * FROM web_cases WHERE id = ? AND user_id = ?", (case_id, current_user["id"]))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -101,9 +104,9 @@ def run_case(case_id: str):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO reports (id, test_type, test_name, status, total_cases, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (report_id, "web", case["name"], "running", len(steps), now, now))
+        INSERT INTO reports (id, user_id, test_type, test_name, status, total_cases, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (report_id, current_user["id"], "web", case["name"], "running", len(steps), now, now))
     conn.commit()
     
     passed_count = 0
@@ -146,25 +149,26 @@ def run_case(case_id: str):
     }
 
 @router.get("/suites")
-def list_suites():
+def list_suites(current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM web_suites ORDER BY created_at DESC")
+    cursor.execute("SELECT * FROM web_suites WHERE user_id = ? ORDER BY created_at DESC", (current_user["id"],))
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 @router.post("/suites")
-def create_suite(data: dict = Body(...)):
+def create_suite(data: dict = Body(...), current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
     suite_id = str(uuid.uuid4())[:8]
     now = datetime.now().isoformat()
     cursor.execute("""
-        INSERT INTO web_suites (id, name, description, case_ids, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO web_suites (id, user_id, name, description, case_ids, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (
         suite_id,
+        current_user["id"],
         data.get("name"),
         data.get("description"),
         json.dumps(data.get("case_ids", [])),
@@ -176,10 +180,10 @@ def create_suite(data: dict = Body(...)):
     return {"id": suite_id, "message": "创建成功"}
 
 @router.get("/suites/{suite_id}")
-def get_suite(suite_id: str):
+def get_suite(suite_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM web_suites WHERE id = ?", (suite_id,))
+    cursor.execute("SELECT * FROM web_suites WHERE id = ? AND user_id = ?", (suite_id, current_user["id"]))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -189,7 +193,7 @@ def get_suite(suite_id: str):
     return result
 
 @router.put("/suites/{suite_id}")
-def update_suite(suite_id: str, data: dict = Body(...)):
+def update_suite(suite_id: str, data: dict = Body(...), current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
     updates = []
@@ -207,25 +211,26 @@ def update_suite(suite_id: str, data: dict = Body(...)):
         updates.append("updated_at = ?")
         params.append(datetime.now().isoformat())
         params.append(suite_id)
-        cursor.execute(f"UPDATE web_suites SET {', '.join(updates)} WHERE id = ?", params)
+        params.append(current_user["id"])
+        cursor.execute(f"UPDATE web_suites SET {', '.join(updates)} WHERE id = ? AND user_id = ?", params)
         conn.commit()
     conn.close()
     return {"message": "更新成功"}
 
 @router.delete("/suites/{suite_id}")
-def delete_suite(suite_id: str):
+def delete_suite(suite_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM web_suites WHERE id = ?", (suite_id,))
+    cursor.execute("DELETE FROM web_suites WHERE id = ? AND user_id = ?", (suite_id, current_user["id"]))
     conn.commit()
     conn.close()
     return {"message": "删除成功"}
 
 @router.post("/suites/{suite_id}/run")
-def run_suite(suite_id: str):
+def run_suite(suite_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM web_suites WHERE id = ?", (suite_id,))
+    cursor.execute("SELECT * FROM web_suites WHERE id = ? AND user_id = ?", (suite_id, current_user["id"]))
     row = cursor.fetchone()
     if not row:
         conn.close()
@@ -238,9 +243,9 @@ def run_suite(suite_id: str):
     now = datetime.now().isoformat()
     
     cursor.execute("""
-        INSERT INTO reports (id, test_type, test_name, status, total_cases, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (report_id, "web_suite", suite["name"], "running", len(case_ids), now, now))
+        INSERT INTO reports (id, user_id, test_type, test_name, status, total_cases, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (report_id, current_user["id"], "web_suite", suite["name"], "running", len(case_ids), now, now))
     conn.commit()
     
     passed_count = 0
@@ -248,7 +253,7 @@ def run_suite(suite_id: str):
     all_logs = []
     
     for case_id in case_ids:
-        cursor.execute("SELECT * FROM web_cases WHERE id = ?", (case_id,))
+        cursor.execute("SELECT * FROM web_cases WHERE id = ? AND user_id = ?", (case_id, current_user["id"]))
         case_row = cursor.fetchone()
         if case_row:
             case = dict(case_row)
@@ -291,25 +296,26 @@ def run_suite(suite_id: str):
     }
 
 @router.get("/tasks")
-def list_tasks():
+def list_tasks(current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM web_tasks ORDER BY created_at DESC")
+    cursor.execute("SELECT * FROM web_tasks WHERE user_id = ? ORDER BY created_at DESC", (current_user["id"],))
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 @router.post("/tasks")
-def create_task(data: dict = Body(...)):
+def create_task(data: dict = Body(...), current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
     task_id = str(uuid.uuid4())[:8]
     now = datetime.now().isoformat()
     cursor.execute("""
-        INSERT INTO web_tasks (id, name, suite_id, task_type, cron_expression, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO web_tasks (id, user_id, name, suite_id, task_type, cron_expression, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         task_id,
+        current_user["id"],
         data.get("name"),
         data.get("suite_id"),
         data.get("task_type", "manual"),
@@ -323,10 +329,10 @@ def create_task(data: dict = Body(...)):
     return {"id": task_id, "message": "创建成功"}
 
 @router.get("/tasks/{task_id}")
-def get_task(task_id: str):
+def get_task(task_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM web_tasks WHERE id = ?", (task_id,))
+    cursor.execute("SELECT * FROM web_tasks WHERE id = ? AND user_id = ?", (task_id, current_user["id"]))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -334,10 +340,10 @@ def get_task(task_id: str):
     return dict(row)
 
 @router.delete("/tasks/{task_id}")
-def delete_task(task_id: str):
+def delete_task(task_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM web_tasks WHERE id = ?", (task_id,))
+    cursor.execute("DELETE FROM web_tasks WHERE id = ? AND user_id = ?", (task_id, current_user["id"]))
     conn.commit()
     conn.close()
     return {"message": "删除成功"}

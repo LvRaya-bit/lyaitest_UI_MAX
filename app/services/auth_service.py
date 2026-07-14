@@ -1,0 +1,63 @@
+from jose import jwt, JWTError
+import bcrypt
+from datetime import datetime, timedelta
+from app.database import get_connection
+import uuid
+
+SECRET_KEY = "lyaitest-secret-key-20260714-keep-it-secret-in-production"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_DAYS = 7
+
+def verify_password(plain_password: str, hashed_password: bytes) -> bool:
+    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password)
+
+def get_password_hash(password: str) -> bytes:
+    password_bytes = password.encode('utf-8')[:72]
+    return bcrypt.hashpw(password_bytes, bcrypt.gensalt())
+
+def create_access_token(data: dict) -> str:
+    to_encode = data.copy()
+    expire = datetime.now() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def decode_token(token: str) -> dict:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except JWTError:
+        return None
+
+def get_user(username: str):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {
+            "id": row[0],
+            "username": row[1],
+            "password_hash": row[2],
+            "created_at": row[3]
+        }
+    return None
+
+def create_user(username: str, password: str) -> dict:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+    if cursor.fetchone():
+        conn.close()
+        return None
+    user_id = str(uuid.uuid4())[:8]
+    now = datetime.now().isoformat()
+    password_hash = get_password_hash(password)
+    cursor.execute("""
+        INSERT INTO users (id, username, password_hash, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (user_id, username, password_hash, now))
+    conn.commit()
+    conn.close()
+    return {"id": user_id, "username": username, "created_at": now}

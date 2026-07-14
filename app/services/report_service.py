@@ -43,31 +43,43 @@ def save_report(report_data: dict):
     return report_id
 
 
-def get_all_reports():
+def get_all_reports(user_id: str = None):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM reports ORDER BY created_at DESC")
+    if user_id:
+        cursor.execute("SELECT * FROM reports WHERE user_id = ? ORDER BY created_at DESC", (user_id,))
+    else:
+        cursor.execute("SELECT * FROM reports ORDER BY created_at DESC")
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 
-def get_reports_by_session(session_id: str):
+def get_reports_by_session(session_id: str, user_id: str = None):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT * FROM reports WHERE session_id = ? ORDER BY created_at DESC",
-        (session_id,)
-    )
+    if user_id:
+        cursor.execute(
+            "SELECT * FROM reports WHERE session_id = ? AND user_id = ? ORDER BY created_at DESC",
+            (session_id, user_id)
+        )
+    else:
+        cursor.execute(
+            "SELECT * FROM reports WHERE session_id = ? ORDER BY created_at DESC",
+            (session_id,)
+        )
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 
-def get_report_by_id(report_id: str):
+def get_report_by_id(report_id: str, user_id: str = None):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM reports WHERE id = ?", (report_id,))
+    if user_id:
+        cursor.execute("SELECT * FROM reports WHERE id = ? AND user_id = ?", (report_id, user_id))
+    else:
+        cursor.execute("SELECT * FROM reports WHERE id = ?", (report_id,))
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None

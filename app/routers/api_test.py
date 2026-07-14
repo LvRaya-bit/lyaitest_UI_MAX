@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, Depends
 from app.database import get_connection
+from app.dependencies.auth import get_current_user
 import json
 import uuid
 from datetime import datetime
@@ -8,25 +9,26 @@ import requests
 router = APIRouter(prefix="/api/v1/api-test", tags=["接口测试"])
 
 @router.get("/interfaces")
-def list_interfaces():
+def list_interfaces(current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM api_interfaces ORDER BY created_at DESC")
+    cursor.execute("SELECT * FROM api_interfaces WHERE user_id = ? ORDER BY created_at DESC", (current_user["id"],))
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 @router.post("/interfaces")
-def create_interface(data: dict = Body(...)):
+def create_interface(data: dict = Body(...), current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
     interface_id = str(uuid.uuid4())[:8]
     now = datetime.now().isoformat()
     cursor.execute("""
-        INSERT INTO api_interfaces (id, name, url, method, headers, params, body, description, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO api_interfaces (id, user_id, name, url, method, headers, params, body, description, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         interface_id,
+        current_user["id"],
         data.get("name"),
         data.get("url"),
         data.get("method", "GET"),
@@ -42,10 +44,10 @@ def create_interface(data: dict = Body(...)):
     return {"id": interface_id, "message": "创建成功"}
 
 @router.get("/interfaces/{interface_id}")
-def get_interface(interface_id: str):
+def get_interface(interface_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM api_interfaces WHERE id = ?", (interface_id,))
+    cursor.execute("SELECT * FROM api_interfaces WHERE id = ? AND user_id = ?", (interface_id, current_user["id"]))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -57,7 +59,7 @@ def get_interface(interface_id: str):
     return result
 
 @router.put("/interfaces/{interface_id}")
-def update_interface(interface_id: str, data: dict = Body(...)):
+def update_interface(interface_id: str, data: dict = Body(...), current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
     updates = []
@@ -87,25 +89,26 @@ def update_interface(interface_id: str, data: dict = Body(...)):
         updates.append("updated_at = ?")
         params.append(datetime.now().isoformat())
         params.append(interface_id)
-        cursor.execute(f"UPDATE api_interfaces SET {', '.join(updates)} WHERE id = ?", params)
+        params.append(current_user["id"])
+        cursor.execute(f"UPDATE api_interfaces SET {', '.join(updates)} WHERE id = ? AND user_id = ?", params)
         conn.commit()
     conn.close()
     return {"message": "更新成功"}
 
 @router.delete("/interfaces/{interface_id}")
-def delete_interface(interface_id: str):
+def delete_interface(interface_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM api_interfaces WHERE id = ?", (interface_id,))
+    cursor.execute("DELETE FROM api_interfaces WHERE id = ? AND user_id = ?", (interface_id, current_user["id"]))
     conn.commit()
     conn.close()
     return {"message": "删除成功"}
 
 @router.post("/interfaces/{interface_id}/run")
-def run_interface(interface_id: str, data: dict = Body({})):
+def run_interface(interface_id: str, data: dict = Body({}), current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM api_interfaces WHERE id = ?", (interface_id,))
+    cursor.execute("SELECT * FROM api_interfaces WHERE id = ? AND user_id = ?", (interface_id, current_user["id"]))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -138,33 +141,33 @@ def run_interface(interface_id: str, data: dict = Body({})):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/scenarios")
-def list_scenarios():
+def list_scenarios(current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM api_scenarios ORDER BY created_at DESC")
+    cursor.execute("SELECT * FROM api_scenarios WHERE user_id = ? ORDER BY created_at DESC", (current_user["id"],))
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 @router.post("/scenarios")
-def create_scenario(data: dict = Body(...)):
+def create_scenario(data: dict = Body(...), current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
     scenario_id = str(uuid.uuid4())[:8]
     now = datetime.now().isoformat()
     cursor.execute("""
-        INSERT INTO api_scenarios (id, name, description, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-    """, (scenario_id, data.get("name"), data.get("description"), now, now))
+        INSERT INTO api_scenarios (id, user_id, name, description, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (scenario_id, current_user["id"], data.get("name"), data.get("description"), now, now))
     conn.commit()
     conn.close()
     return {"id": scenario_id, "message": "创建成功"}
 
 @router.get("/scenarios/{scenario_id}")
-def get_scenario(scenario_id: str):
+def get_scenario(scenario_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM api_scenarios WHERE id = ?", (scenario_id,))
+    cursor.execute("SELECT * FROM api_scenarios WHERE id = ? AND user_id = ?", (scenario_id, current_user["id"]))
     scenario = cursor.fetchone()
     if not scenario:
         conn.close()
@@ -174,9 +177,9 @@ def get_scenario(scenario_id: str):
         SELECT s.*, i.name as interface_name 
         FROM api_scene_steps s 
         LEFT JOIN api_interfaces i ON s.interface_id = i.id 
-        WHERE s.scenario_id = ? 
+        WHERE s.scenario_id = ? AND s.user_id = ?
         ORDER BY s.step_order
-    """, (scenario_id,))
+    """, (scenario_id, current_user["id"]))
     steps = cursor.fetchall()
     conn.close()
     
@@ -192,7 +195,7 @@ def get_scenario(scenario_id: str):
     return result
 
 @router.put("/scenarios/{scenario_id}")
-def update_scenario(scenario_id: str, data: dict = Body(...)):
+def update_scenario(scenario_id: str, data: dict = Body(...), current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
     updates = []
@@ -207,37 +210,39 @@ def update_scenario(scenario_id: str, data: dict = Body(...)):
         updates.append("updated_at = ?")
         params.append(datetime.now().isoformat())
         params.append(scenario_id)
-        cursor.execute(f"UPDATE api_scenarios SET {', '.join(updates)} WHERE id = ?", params)
+        params.append(current_user["id"])
+        cursor.execute(f"UPDATE api_scenarios SET {', '.join(updates)} WHERE id = ? AND user_id = ?", params)
         conn.commit()
     conn.close()
     return {"message": "更新成功"}
 
 @router.delete("/scenarios/{scenario_id}")
-def delete_scenario(scenario_id: str):
+def delete_scenario(scenario_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM api_scene_steps WHERE scenario_id = ?", (scenario_id,))
-    cursor.execute("DELETE FROM api_scenarios WHERE id = ?", (scenario_id,))
+    cursor.execute("DELETE FROM api_scene_steps WHERE scenario_id = ? AND user_id = ?", (scenario_id, current_user["id"]))
+    cursor.execute("DELETE FROM api_scenarios WHERE id = ? AND user_id = ?", (scenario_id, current_user["id"]))
     conn.commit()
     conn.close()
     return {"message": "删除成功"}
 
 @router.post("/scenarios/{scenario_id}/steps")
-def add_scenario_step(scenario_id: str, data: dict = Body(...)):
+def add_scenario_step(scenario_id: str, data: dict = Body(...), current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM api_scenarios WHERE id = ?", (scenario_id,))
+    cursor.execute("SELECT * FROM api_scenarios WHERE id = ? AND user_id = ?", (scenario_id, current_user["id"]))
     if not cursor.fetchone():
         conn.close()
         raise HTTPException(status_code=404, detail="场景不存在")
     
-    cursor.execute("SELECT MAX(step_order) FROM api_scene_steps WHERE scenario_id = ?", (scenario_id,))
+    cursor.execute("SELECT MAX(step_order) FROM api_scene_steps WHERE scenario_id = ? AND user_id = ?", (scenario_id, current_user["id"]))
     max_order = cursor.fetchone()[0] or 0
     
     cursor.execute("""
-        INSERT INTO api_scene_steps (scenario_id, interface_id, step_order, request_data, extract_vars, assertions)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO api_scene_steps (user_id, scenario_id, interface_id, step_order, request_data, extract_vars, assertions)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (
+        current_user["id"],
         scenario_id,
         data.get("interface_id"),
         max_order + 1,
@@ -250,7 +255,7 @@ def add_scenario_step(scenario_id: str, data: dict = Body(...)):
     return {"message": "添加成功"}
 
 @router.put("/scenarios/{scenario_id}/steps/{step_id}")
-def update_scenario_step(scenario_id: str, step_id: str, data: dict = Body(...)):
+def update_scenario_step(scenario_id: str, step_id: str, data: dict = Body(...), current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
     updates = []
@@ -270,26 +275,27 @@ def update_scenario_step(scenario_id: str, step_id: str, data: dict = Body(...))
     if updates:
         params.append(scenario_id)
         params.append(step_id)
-        cursor.execute(f"UPDATE api_scene_steps SET {', '.join(updates)} WHERE scenario_id = ? AND id = ?", params)
+        params.append(current_user["id"])
+        cursor.execute(f"UPDATE api_scene_steps SET {', '.join(updates)} WHERE scenario_id = ? AND id = ? AND user_id = ?", params)
         conn.commit()
     conn.close()
     return {"message": "更新成功"}
 
 @router.delete("/scenarios/{scenario_id}/steps/{step_id}")
-def delete_scenario_step(scenario_id: str, step_id: str):
+def delete_scenario_step(scenario_id: str, step_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM api_scene_steps WHERE scenario_id = ? AND id = ?", (scenario_id, step_id))
+    cursor.execute("DELETE FROM api_scene_steps WHERE scenario_id = ? AND id = ? AND user_id = ?", (scenario_id, step_id, current_user["id"]))
     conn.commit()
     conn.close()
     return {"message": "删除成功"}
 
 @router.post("/scenarios/{scenario_id}/run")
-def run_scenario(scenario_id: str):
+def run_scenario(scenario_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
     
-    cursor.execute("SELECT * FROM api_scenarios WHERE id = ?", (scenario_id,))
+    cursor.execute("SELECT * FROM api_scenarios WHERE id = ? AND user_id = ?", (scenario_id, current_user["id"]))
     scenario = cursor.fetchone()
     if not scenario:
         conn.close()
@@ -299,17 +305,17 @@ def run_scenario(scenario_id: str):
         SELECT s.*, i.name as interface_name, i.url, i.method, i.headers, i.params, i.body 
         FROM api_scene_steps s 
         LEFT JOIN api_interfaces i ON s.interface_id = i.id 
-        WHERE s.scenario_id = ? 
+        WHERE s.scenario_id = ? AND s.user_id = ?
         ORDER BY s.step_order
-    """, (scenario_id,))
+    """, (scenario_id, current_user["id"]))
     steps = cursor.fetchall()
     
     report_id = str(uuid.uuid4())[:8]
     now = datetime.now().isoformat()
     cursor.execute("""
-        INSERT INTO reports (id, test_type, test_name, status, total_cases, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (report_id, "api", scenario["name"], "running", len(steps), now, now))
+        INSERT INTO reports (id, user_id, test_type, test_name, status, total_cases, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (report_id, current_user["id"], "api", scenario["name"], "running", len(steps), now, now))
     conn.commit()
     
     results = []
@@ -434,25 +440,26 @@ def run_scenario(scenario_id: str):
     }
 
 @router.get("/envs")
-def list_envs():
+def list_envs(current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM api_envs ORDER BY created_at DESC")
+    cursor.execute("SELECT * FROM api_envs WHERE user_id = ? ORDER BY created_at DESC", (current_user["id"],))
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 @router.post("/envs")
-def create_env(data: dict = Body(...)):
+def create_env(data: dict = Body(...), current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
     env_id = str(uuid.uuid4())[:8]
     now = datetime.now().isoformat()
     cursor.execute("""
-        INSERT INTO api_envs (id, name, base_url, variables, is_default, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO api_envs (id, user_id, name, base_url, variables, is_default, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (
         env_id,
+        current_user["id"],
         data.get("name"),
         data.get("base_url"),
         json.dumps(data.get("variables", {})),

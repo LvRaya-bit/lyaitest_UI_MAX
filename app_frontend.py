@@ -4,7 +4,7 @@ import json
 
 st.set_page_config(page_title="LYAITEST AI测试平台", page_icon="🤖", layout="wide")
 
-API_BASE = "http://localhost:8000/api/v1"
+API_BASE = "http://localhost:8001/api/v1"
 
 # ============================================
 # 初始化会话状态
@@ -27,61 +27,176 @@ if "selected_interface_id" not in st.session_state:
     st.session_state.selected_interface_id = None
 if "selected_web_case_id" not in st.session_state:
     st.session_state.selected_web_case_id = None
+if "token" not in st.session_state:
+    st.session_state.token = None
+if "username" not in st.session_state:
+    st.session_state.username = None
+if "user_id" not in st.session_state:
+    st.session_state.user_id = None
+if "login_tab" not in st.session_state:
+    st.session_state.login_tab = "login"
 
 # ============================================
-# 侧边栏导航（定时任务已移除）
+# 工具函数（带Token认证）
 # ============================================
-with st.sidebar:
-    st.title("LYAITEST AI测试平台")
-    st.divider()
+def clear_user_cache():
+    """清除所有用户相关的业务缓存，用于切换用户时避免数据串号"""
+    st.session_state.session_id = None
+    st.session_state.messages = []
+    st.session_state.sessions = []
+    st.session_state.knowledge_bases = []
+    st.session_state.interfaces = []
+    st.session_state.web_cases = []
+    st.session_state.selected_interface_id = None
+    st.session_state.selected_web_case_id = None
+    if "selected_kb" in st.session_state:
+        st.session_state.selected_kb = None
+    if "case_steps" in st.session_state:
+        st.session_state.case_steps = []
 
-    menus = [
-        {"id": "ai_assistant", "name": "🤖 AI助手中心"},
-        {"id": "knowledge_base", "name": "📚 项目知识库"},
-        {"id": "api_test", "name": "🔌 接口测试"},
-        {"id": "web_automation", "name": "🌐 Web自动化"},
-        {"id": "test_reports", "name": "📊 测试报告"},
-    ]
-    for item in menus:
-        if st.button(item["name"], key=f"menu_{item['id']}", use_container_width=True,
-                     type="primary" if st.session_state.current_page == item['id'] else "secondary"):
-            st.session_state.current_page = item["id"]
-            st.rerun()
+def get_headers():
+    headers = {}
+    if st.session_state.token:
+        headers["Authorization"] = f"Bearer {st.session_state.token}"
+    return headers
 
-    st.divider()
-    st.caption("v0.3.0 | 对标MSAITest")
-
-
-# ============================================
-# 工具函数
-# ============================================
 def fetch_data(endpoint):
     try:
-        r = requests.get(f"{API_BASE}/{endpoint}")
+        r = requests.get(f"{API_BASE}/{endpoint}", headers=get_headers())
         if r.status_code == 200:
             return r.json()
+        elif r.status_code == 401:
+            st.session_state.token = None
+            st.session_state.username = None
+            st.rerun()
         return []
     except:
         return []
 
-def call_api(method, endpoint, data=None, form_data=None):
+def call_api(method, endpoint, data=None, form_data=None, files=None):
     try:
         url = f"{API_BASE}/{endpoint}"
+        headers = get_headers()
         if method == "POST":
-            if form_data:
-                r = requests.post(url, data=form_data)
+            if files:
+                r = requests.post(url, files=files, headers=headers)
+            elif form_data:
+                r = requests.post(url, data=form_data, headers=headers)
             else:
-                r = requests.post(url, json=data)
+                r = requests.post(url, json=data, headers=headers)
         elif method == "PUT":
-            r = requests.put(url, json=data)
+            r = requests.put(url, json=data, headers=headers)
         elif method == "DELETE":
-            r = requests.delete(url)
+            r = requests.delete(url, headers=headers)
         else:
-            r = requests.get(url)
+            r = requests.get(url, headers=headers)
+        if r.status_code == 401:
+            st.session_state.token = None
+            st.session_state.username = None
+            st.rerun()
         return r
     except Exception as e:
         return None
 
+# ============================================
+# 页面：登录/注册
+# ============================================
+def render_login():
+    st.title("🔐 LYAITEST AI测试平台")
+    st.subheader("用户认证")
+
+    tab_login, tab_register = st.tabs(["登录", "注册"])
+
+    with tab_login:
+        with st.form("login_form"):
+            username = st.text_input("用户名")
+            password = st.text_input("密码", type="password")
+            submitted = st.form_submit_button("登录", use_container_width=True, type="primary")
+
+        if submitted:
+            if username and password:
+                with st.spinner("登录中..."):
+                    try:
+                        r = requests.post(f"{API_BASE}/auth/login", data={
+                            "username": username,
+                            "password": password
+                        })
+                        if r.status_code == 200:
+                            result = r.json()
+                            clear_user_cache()
+                            st.session_state.token = result["access_token"]
+                            st.session_state.username = result["username"]
+                            st.session_state.user_id = result["user_id"]
+                            st.success(f"🎉 欢迎回来，{username}!")
+                            st.rerun()
+                        else:
+                            st.error("用户名或密码错误")
+                    except Exception as e:
+                        st.error(f"登录失败: {e}")
+            else:
+                st.warning("请输入用户名和密码")
+
+    with tab_register:
+        with st.form("register_form"):
+            username = st.text_input("用户名")
+            password = st.text_input("密码", type="password")
+            confirm_password = st.text_input("确认密码", type="password")
+            submitted = st.form_submit_button("注册", use_container_width=True, type="primary")
+
+        if submitted:
+            if username and password and confirm_password:
+                if password == confirm_password:
+                    with st.spinner("注册中..."):
+                        try:
+                            r = requests.post(f"{API_BASE}/auth/register", json={
+                                "username": username,
+                                "password": password
+                            })
+                            if r.status_code == 200:
+                                st.success("✅ 注册成功，请登录")
+                            else:
+                                st.error(r.json().get("detail", "注册失败"))
+                        except Exception as e:
+                            st.error(f"注册失败: {e}")
+                else:
+                    st.warning("两次密码不一致")
+            else:
+                st.warning("请填写所有字段")
+
+    st.divider()
+    st.caption("v0.3.0 | 对标MSAITest")
+
+# ============================================
+# 侧边栏导航
+# ============================================
+def render_sidebar():
+    with st.sidebar:
+        st.title("LYAITEST AI测试平台")
+        st.divider()
+
+        menus = [
+            {"id": "ai_assistant", "name": "🤖 AI助手中心"},
+            {"id": "knowledge_base", "name": "📚 项目知识库"},
+            {"id": "api_test", "name": "🔌 接口测试"},
+            {"id": "web_automation", "name": "🌐 Web自动化"},
+            {"id": "test_reports", "name": "📊 测试报告"},
+        ]
+        for item in menus:
+            if st.button(item["name"], key=f"menu_{item['id']}", use_container_width=True,
+                         type="primary" if st.session_state.current_page == item['id'] else "secondary"):
+                st.session_state.current_page = item["id"]
+                st.rerun()
+
+        st.divider()
+        if st.session_state.username:
+            st.write(f"当前用户: {st.session_state.username}")
+            if st.button("退出登录", use_container_width=True):
+                clear_user_cache()
+                st.session_state.token = None
+                st.session_state.username = None
+                st.session_state.user_id = None
+                st.rerun()
+        st.caption("v0.3.0 | 对标MSAITest")
 
 # ============================================
 # 页面：AI助手中心
@@ -161,13 +276,11 @@ def render_ai_assistant():
             **也可通过下方选择器选择接口/Web用例后点击执行按钮。**
             """)
         else:
-            # 显示绑定的知识库
             current_session = next((s for s in st.session_state.sessions if s["session_id"] == st.session_state.session_id), None)
             if current_session and current_session.get("knowledge_base_id"):
                 kb_name = next((kb["name"] for kb in st.session_state.knowledge_bases if kb["id"] == current_session["knowledge_base_id"]), "未知")
                 st.info(f"📚 当前会话已绑定知识库: {kb_name}")
 
-            # 素材选择器（AI独有执行入口）
             st.session_state.interfaces = fetch_data("api-test/interfaces")
             st.session_state.web_cases = fetch_data("web-automation/cases")
 
@@ -226,12 +339,10 @@ def render_ai_assistant():
 
             st.divider()
 
-            # 消息展示
             for msg in st.session_state.messages:
                 with st.chat_message(msg["role"]):
                     st.write(msg["content"])
 
-            # 自然语言输入
             user_input = st.chat_input("输入消息，AI将根据知识库和测试资源智能响应...")
             if user_input:
                 st.session_state.messages.append({"role": "user", "content": user_input})
@@ -298,12 +409,47 @@ def render_knowledge_base():
                 if kb.get("description"):
                     st.caption(kb["description"])
 
-                st.info("📋 本阶段仅支持知识库基础信息维护。文档上传、向量化检索将在后续版本实现。")
-
                 st.divider()
                 st.write("**知识库信息**")
                 st.write(f"- **ID**: {kb['id']}")
                 st.write(f"- **创建时间**: {kb['created_at'][:19]}")
+
+                st.divider()
+                st.write("**📁 文档管理**")
+
+                with st.form("upload_doc_form"):
+                    uploaded_file = st.file_uploader("上传文档", type=["txt", "md", "markdown"])
+                    if st.form_submit_button("📤 上传文档", use_container_width=True):
+                        if uploaded_file:
+                            with st.spinner("正在上传..."):
+                                files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
+                                try:
+                                    r = call_api("POST", f"knowledge-base/{kb['id']}/documents", files=files)
+                                    if r and r.status_code == 200:
+                                        st.success(f"✅ 文档 {uploaded_file.name} 上传成功")
+                                    else:
+                                        st.error(f"上传失败: {r.status_code if r else '无响应'}")
+                                except Exception as e:
+                                    st.error(f"上传失败: {e}")
+
+                st.divider()
+                st.write("**文档列表**")
+                docs = fetch_data(f"knowledge-base/{kb['id']}/documents")
+                if docs:
+                    for doc in docs:
+                        c1, c2, c3 = st.columns([3, 2, 1])
+                        with c1:
+                            st.write(f"📄 {doc['filename']}")
+                        with c2:
+                            st.write(f"类型: {doc['file_type']} | {doc['created_at'][:19]}")
+                        with c3:
+                            if st.button("🗑️", key=f"del_doc_{doc['id']}"):
+                                r = call_api("DELETE", f"knowledge-base/{kb['id']}/documents/{doc['id']}")
+                                if r and r.status_code == 200:
+                                    st.success("已删除")
+                                    st.rerun()
+                else:
+                    st.info("暂无文档，请上传文档以丰富知识库内容")
 
                 st.divider()
                 st.write("**联动说明**")
@@ -317,7 +463,7 @@ def render_knowledge_base():
 
 
 # ============================================
-# 页面：接口测试（仅接口管理，无执行按钮）
+# 页面：接口测试
 # ============================================
 def render_api_test():
     st.title("🔌 接口测试")
@@ -385,7 +531,7 @@ def render_api_test():
 
 
 # ============================================
-# 页面：Web自动化（仅用例管理，无执行按钮）
+# 页面：Web自动化
 # ============================================
 def render_web_automation():
     st.title("🌐 Web自动化")
@@ -536,13 +682,17 @@ def render_test_reports():
 # ============================================
 # 路由分发
 # ============================================
-if st.session_state.current_page == "ai_assistant":
-    render_ai_assistant()
-elif st.session_state.current_page == "knowledge_base":
-    render_knowledge_base()
-elif st.session_state.current_page == "api_test":
-    render_api_test()
-elif st.session_state.current_page == "web_automation":
-    render_web_automation()
-elif st.session_state.current_page == "test_reports":
-    render_test_reports()
+if not st.session_state.token:
+    render_login()
+else:
+    render_sidebar()
+    if st.session_state.current_page == "ai_assistant":
+        render_ai_assistant()
+    elif st.session_state.current_page == "knowledge_base":
+        render_knowledge_base()
+    elif st.session_state.current_page == "api_test":
+        render_api_test()
+    elif st.session_state.current_page == "web_automation":
+        render_web_automation()
+    elif st.session_state.current_page == "test_reports":
+        render_test_reports()
