@@ -1,10 +1,11 @@
+import os
 from jose import jwt, JWTError
 import bcrypt
 from datetime import datetime, timedelta
 from app.database import get_connection
 import uuid
 
-SECRET_KEY = "lyaitest-secret-key-20260714-keep-it-secret-in-production"
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "lyaitest-secret-key-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 7
 

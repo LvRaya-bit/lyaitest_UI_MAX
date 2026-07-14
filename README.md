@@ -150,6 +150,43 @@ streamlit run app_frontend.py
 
 ---
 
+## 🌐 上线部署（Render + Streamlit Cloud）
+
+### 后端部署（Render）
+
+1. 在 [Render](https://render.com) 创建 Web Service
+2. 连接 GitHub 仓库 `lyaitest_upgrade`
+3. Render 会自动识别 `render.yaml` 配置：
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port 10000`
+4. 在 Render Dashboard → Environment 中配置：
+   - `DEEPSEEK_API_KEY` = 你的 DeepSeek API Key
+   - `JWT_SECRET_KEY` = 随机生成的密钥（用于JWT签名）
+5. Render 会自动挂载 1GB 磁盘到 `/data`，SQLite 数据库保存在 `/data/lyaitest.db`
+
+获取后端域名：`https://lyaitest-backend-xxxx.onrender.com`
+
+### 前端部署（Streamlit Cloud）
+
+1. 在 [Streamlit Cloud](https://streamlit.io/cloud) 创建 App
+2. 连接同一个 GitHub 仓库
+3. 在 App Settings → Secrets 中添加：
+   ```toml
+   api_base = "https://lyaitest-backend-xxxx.onrender.com/api/v1"
+   ```
+4. 部署完成后访问 Streamlit Cloud 提供的域名
+
+### 环境变量说明
+
+| 变量名 | 说明 | 默认值 |
+|--------|------|--------|
+| `DEEPSEEK_API_KEY` | DeepSeek API 密钥 | 必填 |
+| `JWT_SECRET_KEY` | JWT 签名密钥 | 自动生成 |
+| `DATABASE_PATH` | SQLite 数据库路径 | `lyaitest.db` |
+| `API_BASE` | 前端调用的后端地址 | `http://localhost:8001/api/v1` |
+
+---
+
 ## 🔐 用户认证
 
 系统实现了完整的用户认证机制：

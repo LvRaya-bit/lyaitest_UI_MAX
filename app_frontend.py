@@ -1,10 +1,11 @@
 import streamlit as st
 import requests
 import json
+import os
 
 st.set_page_config(page_title="LYAITEST AI测试平台", page_icon="🤖", layout="wide")
 
-API_BASE = "http://localhost:8001/api/v1"
+API_BASE = st.secrets.get("api_base", os.getenv("API_BASE", "http://localhost:8001/api/v1"))
 
 # ============================================
 # 初始化会话状态

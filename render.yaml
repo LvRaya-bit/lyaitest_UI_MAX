@@ -9,3 +9,11 @@ services:
     envVars:
       - key: DEEPSEEK_API_KEY
         sync: false
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: DATABASE_PATH
+        value: /data/lyaitest.db
+    disk:
+      name: lyaitest-data
+      mountPath: /data
+      sizeGB: 1

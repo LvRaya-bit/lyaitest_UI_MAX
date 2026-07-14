@@ -1,7 +1,8 @@
+import os
 import sqlite3
 from datetime import datetime
 
-DB_PATH = "lyaitest.db"
+DB_PATH = os.getenv("DATABASE_PATH", "lyaitest.db")
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
