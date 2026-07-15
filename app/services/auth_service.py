@@ -1,13 +1,29 @@
 import os
+import secrets
 from jose import jwt, JWTError
 import bcrypt
 from datetime import datetime, timedelta
 from app.database import get_connection
 import uuid
 
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "lyaitest-secret-key-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 7
+
+def get_secret_key() -> str:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM config WHERE key = ?", ("jwt_secret_key",))
+    row = cursor.fetchone()
+    if row:
+        conn.close()
+        return row[0]
+    new_key = secrets.token_hex(32)
+    cursor.execute("INSERT INTO config (key, value) VALUES (?, ?)", ("jwt_secret_key", new_key))
+    conn.commit()
+    conn.close()
+    return new_key
+
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", get_secret_key())
 
 def verify_password(plain_password: str, hashed_password: bytes) -> bool:
     return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password)
