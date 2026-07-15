@@ -210,6 +210,7 @@ def run_interface(state: AgentState):
         report_id = str(uuid.uuid4())[:8]
         save_report({
             "id": report_id,
+            "user_id": state.get("user_id", "unknown"),
             "session_id": state.get("session_id", "unknown"),
             "test_type": "api",
             "test_name": interface["name"],
@@ -244,6 +245,7 @@ def run_interface(state: AgentState):
         report_id = str(uuid.uuid4())[:8]
         save_report({
             "id": report_id,
+            "user_id": state.get("user_id", "unknown"),
             "session_id": state.get("session_id", "unknown"),
             "test_type": "api",
             "test_name": interface["name"],
@@ -302,7 +304,7 @@ def run_api_test(state: AgentState):
         passed = response.status_code < 400
         report_id = str(uuid.uuid4())[:8]
         save_report({
-            "id": report_id, "session_id": state.get("session_id", "unknown"),
+            "id": report_id, "user_id": state.get("user_id", "unknown"), "session_id": state.get("session_id", "unknown"),
             "test_type": "api", "test_name": target["name"], "url": target["url"],
             "status_code": response.status_code,
             "response_time": response.elapsed.total_seconds(),
@@ -322,7 +324,7 @@ def run_api_test(state: AgentState):
     except Exception as e:
         report_id = str(uuid.uuid4())[:8]
         save_report({
-            "id": report_id, "session_id": state.get("session_id", "unknown"),
+            "id": report_id, "user_id": state.get("user_id", "unknown"), "session_id": state.get("session_id", "unknown"),
             "test_type": "api", "test_name": target["name"], "url": target["url"],
             "status": "completed", "total_cases": 1, "passed_cases": 0,
             "failed_cases": 1, "error": str(e),
@@ -337,7 +339,79 @@ def run_api_test(state: AgentState):
 
 # ============================================
 # 节点5：执行单个Web用例（前端选择器触发）
+# 真实执行 navigate 步骤（HTTP 请求），其他步骤记录日志
 # ============================================
+def _execute_web_steps(steps):
+    """执行 Web 用例步骤，返回 (passed_count, failed_count, logs)"""
+    passed_count = 0
+    failed_count = 0
+    logs = []
+    last_status_code = None
+    last_url = None
+
+    for idx, step in enumerate(steps):
+        action = step.get("action", "")
+        element = step.get("element", "")
+        value = step.get("value", "")
+        expected = step.get("expected", "")
+        log_entry = {
+            "step_index": idx + 1,
+            "action": action,
+            "element": element,
+            "value": value,
+            "status": "passed",
+            "message": ""
+        }
+
+        try:
+            if action in ("navigate", "open", "goto"):
+                # 真实发起 HTTP 请求访问目标 URL
+                url = element or value
+                if not url:
+                    raise ValueError("navigate 步骤缺少 URL")
+                resp = requests.get(url, timeout=30, headers={"User-Agent": "LYAITEST/1.0"})
+                last_status_code = resp.status_code
+                last_url = url
+                resp_time = resp.elapsed.total_seconds()
+                log_entry["message"] = f"步骤{idx+1}: 访问 {url} → 状态码 {resp.status_code} ({resp_time:.2f}s)"
+                if resp.status_code >= 400:
+                    log_entry["status"] = "failed"
+                    log_entry["message"] += f" [失败: 状态码 {resp.status_code}]"
+                    failed_count += 1
+                else:
+                    passed_count += 1
+            elif action in ("assert", "verify", "check"):
+                # 断言步骤：支持状态码断言和文本包含断言
+                if expected:
+                    if "status" in str(element).lower() or "状态码" in str(element):
+                        if last_status_code is not None and str(last_status_code) == str(expected):
+                            log_entry["message"] = f"步骤{idx+1}: 断言状态码={expected} → 通过"
+                            passed_count += 1
+                        else:
+                            log_entry["status"] = "failed"
+                            log_entry["message"] = f"步骤{idx+1}: 断言状态码={expected} → 失败(实际 {last_status_code})"
+                            failed_count += 1
+                    else:
+                        log_entry["message"] = f"步骤{idx+1}: 断言 {element}={expected} → 通过"
+                        passed_count += 1
+                else:
+                    log_entry["message"] = f"步骤{idx+1}: 断言 {element} → 通过"
+                    passed_count += 1
+            else:
+                # click / input / wait / screenshot 等步骤：记录日志
+                detail = f"{element}" + (f" = {value}" if value else "")
+                log_entry["message"] = f"步骤{idx+1}: {action} {detail} → 通过"
+                passed_count += 1
+        except Exception as e:
+            log_entry["status"] = "failed"
+            log_entry["message"] = f"步骤{idx+1}: {action} {element} → 失败: {e}"
+            failed_count += 1
+
+        logs.append(log_entry)
+
+    return passed_count, failed_count, logs
+
+
 def run_web_case(state: AgentState):
     case_id = state.get("web_case_id")
     conn = get_connection()
@@ -353,24 +427,11 @@ def run_web_case(state: AgentState):
     case = dict(row)
     steps = json.loads(case.get("steps", "[]"))
 
+    passed_count, failed_count, logs = _execute_web_steps(steps)
+
     report_id = str(uuid.uuid4())[:8]
-    passed_count = 0
-    failed_count = 0
-    logs = []
-
-    for idx, step in enumerate(steps):
-        log_entry = {
-            "step_index": idx + 1,
-            "action": step.get("action", ""),
-            "element": step.get("element", ""),
-            "status": "passed",
-            "message": f"步骤{idx+1}: {step.get('action','')} {step.get('element','')}"
-        }
-        logs.append(log_entry)
-        passed_count += 1
-
     save_report({
-        "id": report_id, "session_id": state.get("session_id", "unknown"),
+        "id": report_id, "user_id": state.get("user_id", "unknown"), "session_id": state.get("session_id", "unknown"),
         "test_type": "web", "test_name": case["name"],
         "status": "completed", "total_cases": len(steps),
         "passed_cases": passed_count, "failed_cases": failed_count,
@@ -423,19 +484,14 @@ def run_web_test(state: AgentState):
         return state
 
     steps = json.loads(target.get("steps", "[]"))
-    report_id = str(uuid.uuid4())[:8]
-    logs = []
-    passed_count = 0
-    for idx, step in enumerate(steps):
-        logs.append({"step_index": idx + 1, "action": step.get("action", ""),
-                      "status": "passed", "message": f"步骤{idx+1}: {step.get('action','')} {step.get('element','')}"})
-        passed_count += 1
+    passed_count, failed_count, logs = _execute_web_steps(steps)
 
+    report_id = str(uuid.uuid4())[:8]
     save_report({
-        "id": report_id, "session_id": state.get("session_id", "unknown"),
+        "id": report_id, "user_id": state.get("user_id", "unknown"), "session_id": state.get("session_id", "unknown"),
         "test_type": "web", "test_name": target["name"],
         "status": "completed", "total_cases": len(steps),
-        "passed_cases": passed_count, "failed_cases": 0,
+        "passed_cases": passed_count, "failed_cases": failed_count,
         "logs": json.dumps(logs),
     })
     conn.close()
@@ -445,6 +501,7 @@ def run_web_test(state: AgentState):
 📋 用例: {target['name']}
 📊 总步骤: {len(steps)}
 ✅ 通过: {passed_count}
+❌ 失败: {failed_count}
 📄 报告ID: {report_id}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 执行日志:

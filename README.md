@@ -2,6 +2,31 @@
 
 **LYAITEST** 是一个基于 LangGraph 和 FastAPI 构建的智能测试平台。它通过自然语言驱动 Agent 执行接口测试、Web 自动化测试和测试用例生成，并自动记录测试报告。系统支持完整的用户认证机制，数据按用户隔离。
 
+本项目为 UI 升级版（lyaitest_UI_MAX），基于 v0 设计标准对 Streamlit 前端进行了 7 页面 1:1 复刻整改，统一浅蓝简约后台风格，并修复了多项功能 Bug。
+
+---
+
+## ✨ UI 升级特性（lyaitest_UI_MAX 版本）
+
+### 视觉与布局
+- **统一配色**：页面底色 `#f8fafc` 浅蓝，主按钮 `#3b82f6` 天空蓝，白色细边框圆角卡片，禁用红色/黑色按钮
+- **登录页**：左右分栏布局（左 38% 蓝色品牌宣传栏 / 右 62% 登录注册表单），垂直居中自适应窗口高度，修复注册 Tab 文字不显示问题
+- **全局导航栏**：全部后台页面顶部横向导航（AI助手 / 知识库 / 接口测试 / Web自动化 / 测试报告 / 用户管理），退出按钮置于右上角，侧边栏仅展示用户信息
+- **AI 助手中心**：左侧会话管理 22% + 右侧 AI 对话 78%，右侧含机器人图标、快捷指令、白色圆角卡片、底部输入框+发送按钮、直接执行接口/Web测试按钮
+- **接口测试 / Web 自动化**：仅素材管理，无执行运行按钮，列表条目点击可回填表单查看与编辑
+
+### 功能增强
+- **AI 会话管理**：支持自定义会话名称、删除会话、切换/修改绑定知识库
+- **直接执行按钮**：AI 助手中可直接选择接口或 Web 用例一键执行，避免意图识别错乱
+- **列表编辑回填**：接口测试 / Web 自动化列表点击条目自动回填表单，支持查看、编辑、更新
+- **侧边栏折叠恢复**：修复侧边栏折叠后无法再次展开的问题
+
+### Bug 修复
+- 修复 AI 对话中执行接口/Web自动化测试失效问题（navigate 步骤真实发起 HTTP 请求）
+- 修复 `save_report` 缺少 `user_id` 字段导致测试报告保存 500 错误
+- 修复 AI 助手执行类型错乱（选了接口后再选 Web 用例仍执行接口测试）
+- 修复接口测试/Web自动化页面编辑已创建用例报错（pending-load 模式）
+
 ---
 
 ## 🎯 项目背景与目标
@@ -99,8 +124,8 @@ lyaitest_upgrade/
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/LvRaya-bit/lyaitest_upgrade.git
-cd lyaitest_upgrade/lyaitest_upgrade
+git clone https://github.com/LvRaya-bit/lyaitest_UI_MAX.git
+cd lyaitest_UI_MAX/lyaitest_upgrade
 ```
 
 ### 2. 创建虚拟环境
@@ -129,10 +154,10 @@ ZHIPU_API_KEY=your_zhipu_api_key   # 如果用智谱
 ### 5. 启动后端服务
 
 ```bash
-uvicorn app.main:app --reload
+uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload
 ```
 
-后端默认运行在 http://localhost:8000
+后端默认运行在 http://127.0.0.1:8001
 
 ### 6. 启动前端界面
 

@@ -1,6 +1,12 @@
+[client]
+toolbarMode = "minimal"
+
+[server]
+headless = true
+
 [theme]
-primaryColor = "#1E88E5"          # 主色：蓝色
-backgroundColor = "#FFFFFF"       # 背景色：白色
-secondaryBackgroundColor = "#F5F9FF"  # 次要背景：浅蓝色
-textColor = "#1A2332"             # 文字颜色：深蓝灰色
+primaryColor = "#3b82f6"
+backgroundColor = "#f8fafc"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#1e293b"
 font = "sans serif"

@@ -12,6 +12,10 @@ class SessionCreate(BaseModel):
     name: Optional[str] = None
     knowledge_base_id: Optional[str] = None
 
+class SessionUpdate(BaseModel):
+    name: Optional[str] = None
+    knowledge_base_id: Optional[str] = None
+
 class SessionResponse(BaseModel):
     session_id: str
     name: str
@@ -72,6 +76,42 @@ async def get_session(session_id: str, current_user: dict = Depends(get_current_
         name=row["name"],
         created_at=row["created_at"],
         knowledge_base_id=row["knowledge_base_id"]
+    )
+
+@router.put("/{session_id}", response_model=SessionResponse)
+async def update_session(session_id: str, request: SessionUpdate, current_user: dict = Depends(get_current_user)):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM sessions WHERE session_id = ? AND user_id = ?", (session_id, current_user["id"]))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    updates = []
+    params = []
+    if request.name is not None:
+        updates.append("name = ?")
+        params.append(request.name)
+    if request.knowledge_base_id is not None:
+        updates.append("knowledge_base_id = ?")
+        params.append(request.knowledge_base_id)
+    if updates:
+        updates.append("updated_at = ?")
+        params.append(datetime.now().isoformat())
+        params.append(session_id)
+        params.append(current_user["id"])
+        cursor.execute(f"UPDATE sessions SET {', '.join(updates)} WHERE session_id = ? AND user_id = ?", params)
+        conn.commit()
+
+    cursor.execute("SELECT * FROM sessions WHERE session_id = ? AND user_id = ?", (session_id, current_user["id"]))
+    updated = cursor.fetchone()
+    conn.close()
+    return SessionResponse(
+        session_id=updated["session_id"],
+        name=updated["name"],
+        created_at=updated["created_at"],
+        knowledge_base_id=updated["knowledge_base_id"]
     )
 
 @router.get("/{session_id}/messages", response_model=List[MessageResponse])

@@ -12,12 +12,13 @@ def save_report(report_data: dict):
 
     cursor.execute("""
         INSERT INTO reports (
-            id, session_id, task_id, test_type, test_name, url, status_code,
+            id, user_id, session_id, task_id, test_type, test_name, url, status_code,
             response_time, title, screenshot, error, status, total_cases,
             passed_cases, failed_cases, duration, logs, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         report_id,
+        report_data.get("user_id", "unknown"),
         report_data.get("session_id", "unknown"),
         report_data.get("task_id"),
         report_data.get("test_type", "unknown"),
