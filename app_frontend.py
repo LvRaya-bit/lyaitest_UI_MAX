@@ -17,7 +17,12 @@ except Exception:
 def inject_global_css():
     st.markdown("""
     <style>
-    html, body, [data-testid="stAppViewContainer"], .stApp {
+    html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+        background-color: #f8fafc !important;
+    }
+    [data-testid="stAppViewContainer"], .stApp {
         background-color: #f8fafc !important;
         color: #1e293b;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -26,6 +31,31 @@ def inject_global_css():
     footer {visibility: hidden;}
     [data-testid="stToolbar"] {display: none !important;}
     [data-testid="stDecoration"] {display: none !important;}
+
+    /* 顶部 Header：消除白色条与缝隙 */
+    [data-testid="stHeader"] {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        height: 0 !important;
+        min-height: 0 !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        visibility: hidden !important;
+    }
+    [data-testid="stHeader"] > div {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        height: 0 !important;
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+    header[data-testid="stHeader"]::before,
+    header[data-testid="stHeader"]::after {
+        display: none !important;
+        content: none !important;
+    }
 
     /* 侧边栏 */
     [data-testid="stSidebar"] {
@@ -48,10 +78,56 @@ def inject_global_css():
 
     /* 主内容区 */
     .block-container {
-        padding-top: 1.2rem !important;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
         padding-left: 2rem !important;
         padding-right: 2rem !important;
         max-width: 100% !important;
+        margin-top: 0 !important;
+    }
+    [data-testid="stAppViewContainer"] > section,
+    section[data-testid="stMain"] {
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+    [data-testid="stMainBlockContainer"] {
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+        margin-top: 0 !important;
+    }
+    [data-testid="stHorizontalBlock"] {
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+        gap: 0 !important;
+    }
+    [data-testid="stHorizontalBlock"] > div {
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+    }
+    [data-testid="stForm"] {
+        border: none !important;
+        padding: 0 !important;
+        background: transparent !important;
+    }
+    /* 消除 Streamlit 默认的顶部间距容器 */
+    [data-testid="stMain"] > div:first-child {
+        padding-top: 0 !important;
+        margin-top: 0 !important;
+    }
+    /* 消除 stMarkdown 产生的空白块 */
+    [data-testid="stMarkdown"] {
+        margin-top: 0 !important;
+    }
+    /* 消除装饰性空 div */
+    [data-testid="stDecoration"], [data-testid="stToolbar"] {
+        display: none !important;
+        height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
     }
 
     /* ===== 按钮统一样式：禁用红色/黑色 ===== */
@@ -413,6 +489,16 @@ def render_login():
     st.markdown("""
     <style>
     [data-testid="stSidebar"] {display: none !important;}
+    /* 登录页：彻底消除顶部白色缝隙 */
+    [data-testid="stHeader"] {
+        display: none !important;
+        height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        background: transparent !important;
+    }
+    [data-testid="stToolbar"] {display: none !important;}
+    [data-testid="stDecoration"] {display: none !important;}
     /* 登录页主容器：占满视口高度 */
     .block-container {
         padding-top: 0 !important;
@@ -420,23 +506,56 @@ def render_login():
         padding-left: 0 !important;
         padding-right: 0 !important;
         max-width: 100% !important;
+        margin-top: 0 !important;
     }
-    [data-testid="stAppViewContainer"] > section { padding: 0 !important; }
+    [data-testid="stAppViewContainer"] > section,
+    section[data-testid="stMain"] {
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+    [data-testid="stMainBlockContainer"] {
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+    [data-testid="stMain"] > div:first-child {
+        padding-top: 0 !important;
+        margin-top: 0 !important;
+    }
     /* 左右分栏容器：占满视口高度并垂直居中 */
     [data-testid="stHorizontalBlock"] {
         min-height: 100vh !important;
         align-items: stretch !important;
         gap: 0 !important;
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+        border: none !important;
     }
     [data-testid="stHorizontalBlock"] > div {
         display: flex !important;
         flex-direction: column !important;
         justify-content: center !important;
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+        border: none !important;
+        background: transparent !important;
     }
     [data-testid="stHorizontalBlock"] > div > div {
         gap: 0 !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        border: none !important;
+        background: transparent !important;
     }
-    [data-testid="stHorizontalBlock"] > div:nth-child(2) { background: #ffffff; min-height: 100vh; }
+    [data-testid="stHorizontalBlock"] > div:first-child {
+        min-height: 100vh !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        background: transparent !important;
+    }
     /* 左侧品牌面板 */
     .login-left {
         min-height: 100vh;
